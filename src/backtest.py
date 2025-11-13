@@ -8,9 +8,6 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
-# 🔁 GANTI INI:
-# from .qflib_adapters import to_qfseries
-# ✅ JADI INI:
 from qflib_adapters import to_qfseries
 
 
@@ -61,7 +58,8 @@ def run_backtest(
     result["position_value"] = notional_equity * positions.abs()
 
     if stop_loss is not None:
-        result["stop_loss"] = stop_loss.reindex(result.index)
+        aligned_stop = stop_loss.reindex(result.index).astype(float)
+        result["stop_loss"] = aligned_stop
     else:
         result["stop_loss"] = np.nan
 
