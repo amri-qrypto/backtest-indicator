@@ -1,0 +1,6 @@
+pandas
+numpy
+matplotlib
+python-dateutil
+qf-lib
+jupyterlab
