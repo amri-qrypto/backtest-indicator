@@ -2,6 +2,19 @@
 from __future__ import annotations
 
 import contextlib
+import sys
+from pathlib import Path
+
+# Ensure the ``src`` directory is importable regardless of the working
+# directory used to launch Python or Jupyter.  This keeps imports such as
+# ``from backtest import run_backtest`` functional from notebooks and scripts
+# without requiring manual ``PYTHONPATH`` management.
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_PATH = PROJECT_ROOT / "src"
+if SRC_PATH.exists():
+    src_str = str(SRC_PATH)
+    if src_str not in sys.path:
+        sys.path.insert(0, src_str)
 
 # The "matplotlib_inline" backend bundled with some notebook environments
 # expects ``matplotlib.rcParams`` to expose a private ``_get`` method.  Older

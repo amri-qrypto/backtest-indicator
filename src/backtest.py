@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import sqrt
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,6 +32,7 @@ def run_backtest(
     positions: pd.Series,
     initial_capital: float = 10000.0,
     trading_cost_bps: float = 0.0,
+    stop_loss: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
     """Run a vectorized backtest for a long/cash strategy."""
     if not df.index.equals(positions.index):
@@ -55,6 +56,22 @@ def run_backtest(
 
     result["trading_cost"] = cost
     result["equity_curve"] = initial_capital * (1.0 + result["strategy_ret"]).cumprod()
+
+    notional_equity = result["equity_curve"].shift(1).fillna(initial_capital)
+    result["position_value"] = notional_equity * positions.abs()
+
+    if stop_loss is not None:
+        result["stop_loss"] = stop_loss.reindex(result.index)
+    else:
+        result["stop_loss"] = np.nan
+
+    signal_map = {1: "Long", -1: "Short", 0: "Flat"}
+    result["signal"] = positions.round().astype(int).map(signal_map).fillna("Flat")
+
+    rolling_max = result["equity_curve"].cummax()
+    result["drawdown"] = result["equity_curve"] / rolling_max - 1.0
+    result["cumulative_pnl"] = result["equity_curve"] - initial_capital
+    result["net_pnl"] = result["cumulative_pnl"]
 
     return result
 
