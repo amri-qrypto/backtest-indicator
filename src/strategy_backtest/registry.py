@@ -8,6 +8,7 @@ from .base import StrategyBase
 
 _STRATEGY_MODULES = {
     "ema112_atr": "src.strategy_backtest.strategies.ema112_atr",
+    "vwap": "src.strategy_backtest.strategies.vwap",
 }
 
 _CACHE: Dict[str, Type[StrategyBase]] = {}
