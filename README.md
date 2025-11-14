@@ -2,9 +2,13 @@
 
 ## Ringkasan
 Proyek ini mengevaluasi berbagai strategi trading BTCUSDT harian menggunakan Python, pandas,
-dan metrik performa QF-Lib. Setiap strategi menghasilkan sinyal long/cash yang kemudian
-diuji melalui _vectorized backtest_ untuk memperoleh Sharpe ratio, CAGR, volatilitas tahunan,
-dan statistik risiko lain.
+dan metrik performa QF-Lib. Dua alur utama yang disediakan adalah:
+
+1. **Strategi terprogram** – kumpulan notebook pada folder `notebooks/` yang menghitung indikator
+   (EMA, MACD, ATR, mean reversion) langsung di Python lalu menjalankan _vectorized backtest_.
+2. **Analisis sinyal TradingView** – notebook baru `backtest-strategy.ipynb` yang memuat sinyal
+   siap pakai dari file CSV TradingView, mengonversinya ke struktur QF-Lib, kemudian menyajikan
+   trade log, visualisasi, klasifikasi kegagalan, dan eksperimen optimasi filter.
 
 ## Fitur Utama
 - 📈 **Koleksi strategi**: EMA trend following (50, 112, hasil optimasi 45), MACD crossover,
@@ -15,6 +19,9 @@ dan statistik risiko lain.
   EMA 20–200; hasil terbaik (EMA 45) disertakan dalam perbandingan final.
 - 📊 **Perbandingan menyeluruh**: `strategy_comparison.ipynb` menggabungkan Sharpe,
   CAGR, drawdown, dan volatilitas dari seluruh strategi.
+- 🗂️ **Playground sinyal TradingView**: `backtest-strategy.ipynb` menerima file CSV hasil
+  ekspor TradingView, menafsirkan kolom sinyal long/short, lalu menjalankan backtest dengan
+  metrik QF-Lib sekaligus analisis trade kalah dan ide optimasi.
 
 ## Struktur Folder
 ```
@@ -29,7 +36,8 @@ project-root/
 │  ├─ strategy_comparison.ipynb
 │  ├─ strategy_ema.ipynb
 │  ├─ strategy_macd.ipynb
-│  └─ strategy_oversold_mean_rev.ipynb
+│  ├─ strategy_oversold_mean_rev.ipynb
+│  └─ backtest-strategy.ipynb
 ├─ src/
 │  ├─ __init__.py
 │  ├─ backtest.py
@@ -68,6 +76,24 @@ project-root/
 - `strategy_oversold_mean_rev.ipynb`: pendekatan mean reversion berbasis indikator oversold.
 - `strategy_atr_filter.ipynb`: filter tren dengan ATR dan median volatilitas.
 - `strategy_comparison.ipynb`: final dashboard Sharpe, CAGR, drawdown, dan volatilitas dari seluruh strategi.
+- `backtest-strategy.ipynb`: playground generik untuk menguji sinyal dari file CSV TradingView.
+
+## TradingView Strategy Playground
+
+Notebook `backtest-strategy.ipynb` ditujukan bagi pengguna yang telah memiliki sinyal strategi
+dari TradingView (misalnya hasil indikator kustom) dalam bentuk CSV. Fitur yang disediakan:
+
+- Parameterisasi file input sehingga nama file dapat diganti cepat.
+- Sanitasi nama kolom dan adaptasi ke `PriceField` QF-Lib.
+- Implementasi strategi `ExcelSignalStrategy` yang membaca kolom sinyal long/short, termasuk
+  opsi filter tambahan (Money Flow, Confluence, kemiringan EMA).
+- Ringkasan metrik via `qflib_metrics_from_returns`, daftar trade lengkap, dan visualisasi entry/exit.
+- Analisis trade rugi untuk menemukan pola kelemahan berdasarkan konteks indikator.
+- Grid search ringan guna mengevaluasi kombinasi filter optimasi.
+
+> **Cara pakai singkat**: buka notebook, set `DATA_FILE` dan mapping `signal_columns` sesuai header
+> CSV Anda, lalu jalankan seluruh sel. Notebook akan menampilkan trade log, grafik harga, equity
+> curve, serta tabel klasifikasi trade rugi dan eksperimen filter.
 
 ## Data
 Letakkan file CSV historis BTCUSDT harian pada folder `data/` dengan nama `OKX_BTCUSDT, 1D.csv`.
