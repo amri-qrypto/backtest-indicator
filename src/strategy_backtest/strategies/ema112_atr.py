@@ -127,12 +127,10 @@ class Strategy(StrategyBase):
         volatility_filter = vol_norm.between(low, high).fillna(False)
 
         entry_condition = cross_above & slope_filter_long & volatility_filter
-        short_condition = (
-            self.allow_short
-            and cross_below
-            and slope_filter_short
-            and volatility_filter
-        )
+        if self.allow_short:
+            short_condition = cross_below & slope_filter_short & volatility_filter
+        else:
+            short_condition = pd.Series(False, index=index)
 
         long_entry = pd.Series(False, index=index)
         long_exit = pd.Series(False, index=index)
