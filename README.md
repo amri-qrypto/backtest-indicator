@@ -6,9 +6,10 @@ dan metrik performa QF-Lib. Dua alur utama yang disediakan adalah:
 
 1. **Strategi terprogram** – kumpulan notebook pada folder `notebooks/` yang menghitung indikator
    (EMA, MACD, ATR, mean reversion) langsung di Python lalu menjalankan _vectorized backtest_.
-2. **Analisis sinyal TradingView** – notebook baru `backtest-strategy.ipynb` yang memuat sinyal
-   siap pakai dari file CSV TradingView, mengonversinya ke struktur QF-Lib, kemudian menyajikan
-   trade log, visualisasi, klasifikasi kegagalan, dan eksperimen optimasi filter.
+2. **Analisis sinyal TradingView** – notebook `backtest-strategy.ipynb` memuat sinyal siap pakai
+   dari file CSV TradingView, mengonversinya ke struktur QF-Lib, menjalankan strategi Python yang
+   bisa dipilih dari folder `src/strategy_backtest/`, lalu menyajikan trade log, visualisasi,
+   klasifikasi kegagalan, dan eksperimen optimasi parameter.
 
 ## Fitur Utama
 - 📈 **Koleksi strategi**: EMA trend following (50, 112, hasil optimasi 45), MACD crossover,
@@ -20,8 +21,9 @@ dan metrik performa QF-Lib. Dua alur utama yang disediakan adalah:
 - 📊 **Perbandingan menyeluruh**: `strategy_comparison.ipynb` menggabungkan Sharpe,
   CAGR, drawdown, dan volatilitas dari seluruh strategi.
 - 🗂️ **Playground sinyal TradingView**: `backtest-strategy.ipynb` menerima file CSV hasil
-  ekspor TradingView, menafsirkan kolom sinyal long/short, lalu menjalankan backtest dengan
-  metrik QF-Lib sekaligus analisis trade kalah dan ide optimasi.
+  ekspor TradingView, menafsirkan kolom sinyal long/short, memilih strategi Python (misalnya
+  EMA112 + ATR exit) dari registry, lalu menjalankan backtest dengan metrik QF-Lib sekaligus
+  analisis trade kalah dan ide optimasi.
 
 ## Struktur Folder
 ```
@@ -47,6 +49,14 @@ project-root/
 │  ├─ qflib_metrics.py
 │  ├─ strategy.py
 │  ├─ strategy_atr_filter.py
+│  ├─ strategy_backtest/
+│  │  ├─ __init__.py
+│  │  ├─ base.py
+│  │  ├─ pipeline.py
+│  │  ├─ registry.py
+│  │  ├─ utils.py
+│  │  └─ strategies/
+│  │     └─ ema112_atr.py
 │  ├─ strategy_macd.py
 │  └─ strategy_oversold.py
 ├─ requirements.txt
@@ -84,16 +94,19 @@ Notebook `backtest-strategy.ipynb` ditujukan bagi pengguna yang telah memiliki s
 dari TradingView (misalnya hasil indikator kustom) dalam bentuk CSV. Fitur yang disediakan:
 
 - Parameterisasi file input sehingga nama file dapat diganti cepat.
-- Sanitasi nama kolom dan adaptasi ke `PriceField` QF-Lib.
-- Implementasi strategi `ExcelSignalStrategy` yang membaca kolom sinyal long/short, termasuk
-  opsi filter tambahan (Money Flow, Confluence, kemiringan EMA).
-- Ringkasan metrik via `qflib_metrics_from_returns`, daftar trade lengkap, dan visualisasi entry/exit.
-- Analisis trade rugi untuk menemukan pola kelemahan berdasarkan konteks indikator.
-- Grid search ringan guna mengevaluasi kombinasi filter optimasi.
+- Sanitasi nama kolom dan adaptasi ke struktur DataFrame yang kompatibel dengan QF-Lib.
+- Registry strategi Python di `src/strategy_backtest/strategies/` (misalnya `ema112_atr`
+  dengan entry EMA50 > EMA112 dan exit trailing stop ATR). Strategi dapat diganti cukup dengan
+  mengubah `STRATEGY_NAME` di sel parameter notebook.
+- `SignalBacktester` menghasilkan metrik QF-Lib, trade log lengkap, visualisasi entry/exit,
+  serta distribusi PnL.
+- Analisis trade rugi untuk menemukan pola kelemahan berdasarkan konteks indikator yang dicatat
+  strategi.
+- Eksperimen optimasi parameter (contohnya grid ATR multiplier) langsung dari notebook.
 
-> **Cara pakai singkat**: buka notebook, set `DATA_FILE` dan mapping `signal_columns` sesuai header
-> CSV Anda, lalu jalankan seluruh sel. Notebook akan menampilkan trade log, grafik harga, equity
-> curve, serta tabel klasifikasi trade rugi dan eksperimen filter.
+> **Cara pakai singkat**: buka notebook, set `DATA_FILE`, pilih `STRATEGY_NAME` dan parameter
+> tambahannya, lalu jalankan seluruh sel. Notebook akan menampilkan trade log, grafik harga,
+> equity curve, serta tabel klasifikasi trade rugi dan eksperimen parameter.
 
 ## Data
 Letakkan file CSV historis BTCUSDT harian pada folder `data/` dengan nama `OKX_BTCUSDT, 1D.csv`.

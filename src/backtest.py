@@ -8,7 +8,7 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
-from qflib_adapters import to_qfseries
+from .qflib_adapters import to_qfseries
 
 
 @dataclass
