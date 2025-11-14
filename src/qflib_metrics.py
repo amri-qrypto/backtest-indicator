@@ -7,7 +7,7 @@ from typing import Dict, Iterable
 import numpy as np
 import pandas as pd
 
-from qflib_adapters import to_qfseries
+from .qflib_adapters import to_qfseries
 
 try:  # pragma: no cover - optional dependency at runtime
     from qf_lib.analysis.timeseries_analysis.timeseries_analysis import TimeseriesAnalysis

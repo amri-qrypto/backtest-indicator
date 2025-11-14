@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from strategy_ema import ema_trend_signals
+from .strategy_ema import ema_trend_signals
 
 
 def ema_vs_price_signals(

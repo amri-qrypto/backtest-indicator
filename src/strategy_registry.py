@@ -5,11 +5,11 @@ from typing import Callable, Dict, Iterable
 
 import pandas as pd
 
-from strategy import ema_vs_price_signals
-from strategy_atr_filter import atr_filter_signals
-from strategy_ema import ema_trend_signals
-from strategy_macd import macd_signals
-from strategy_oversold import oversold_signals
+from .strategy import ema_vs_price_signals
+from .strategy_atr_filter import atr_filter_signals
+from .strategy_ema import ema_trend_signals
+from .strategy_macd import macd_signals
+from .strategy_oversold import oversold_signals
 
 StrategyFunction = Callable[[pd.DataFrame], pd.Series]
 

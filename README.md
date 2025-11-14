@@ -2,9 +2,14 @@
 
 ## Ringkasan
 Proyek ini mengevaluasi berbagai strategi trading BTCUSDT harian menggunakan Python, pandas,
-dan metrik performa QF-Lib. Setiap strategi menghasilkan sinyal long/cash yang kemudian
-diuji melalui _vectorized backtest_ untuk memperoleh Sharpe ratio, CAGR, volatilitas tahunan,
-dan statistik risiko lain.
+dan metrik performa QF-Lib. Dua alur utama yang disediakan adalah:
+
+1. **Strategi terprogram** – kumpulan notebook pada folder `notebooks/` yang menghitung indikator
+   (EMA, MACD, ATR, mean reversion) langsung di Python lalu menjalankan _vectorized backtest_.
+2. **Analisis sinyal TradingView** – notebook `backtest-strategy.ipynb` memuat sinyal siap pakai
+   dari file CSV TradingView, mengonversinya ke struktur QF-Lib, menjalankan strategi Python yang
+   bisa dipilih dari folder `src/strategy_backtest/`, lalu menyajikan trade log, visualisasi,
+   klasifikasi kegagalan, dan eksperimen optimasi parameter.
 
 ## Fitur Utama
 - 📈 **Koleksi strategi**: EMA trend following (50, 112, hasil optimasi 45), MACD crossover,
@@ -15,6 +20,10 @@ dan statistik risiko lain.
   EMA 20–200; hasil terbaik (EMA 45) disertakan dalam perbandingan final.
 - 📊 **Perbandingan menyeluruh**: `strategy_comparison.ipynb` menggabungkan Sharpe,
   CAGR, drawdown, dan volatilitas dari seluruh strategi.
+- 🗂️ **Playground sinyal TradingView**: `backtest-strategy.ipynb` menerima file CSV hasil
+  ekspor TradingView, menafsirkan kolom sinyal long/short, memilih strategi Python (misalnya
+  EMA112 + ATR exit) dari registry, lalu menjalankan backtest dengan metrik QF-Lib sekaligus
+  analisis trade kalah dan ide optimasi.
 
 ## Struktur Folder
 ```
@@ -29,7 +38,8 @@ project-root/
 │  ├─ strategy_comparison.ipynb
 │  ├─ strategy_ema.ipynb
 │  ├─ strategy_macd.ipynb
-│  └─ strategy_oversold_mean_rev.ipynb
+│  ├─ strategy_oversold_mean_rev.ipynb
+│  └─ backtest-strategy.ipynb
 ├─ src/
 │  ├─ __init__.py
 │  ├─ backtest.py
@@ -39,6 +49,14 @@ project-root/
 │  ├─ qflib_metrics.py
 │  ├─ strategy.py
 │  ├─ strategy_atr_filter.py
+│  ├─ strategy_backtest/
+│  │  ├─ __init__.py
+│  │  ├─ base.py
+│  │  ├─ pipeline.py
+│  │  ├─ registry.py
+│  │  ├─ utils.py
+│  │  └─ strategies/
+│  │     └─ ema112_atr.py
 │  ├─ strategy_macd.py
 │  └─ strategy_oversold.py
 ├─ requirements.txt
@@ -68,6 +86,27 @@ project-root/
 - `strategy_oversold_mean_rev.ipynb`: pendekatan mean reversion berbasis indikator oversold.
 - `strategy_atr_filter.ipynb`: filter tren dengan ATR dan median volatilitas.
 - `strategy_comparison.ipynb`: final dashboard Sharpe, CAGR, drawdown, dan volatilitas dari seluruh strategi.
+- `backtest-strategy.ipynb`: playground generik untuk menguji sinyal dari file CSV TradingView.
+
+## TradingView Strategy Playground
+
+Notebook `backtest-strategy.ipynb` ditujukan bagi pengguna yang telah memiliki sinyal strategi
+dari TradingView (misalnya hasil indikator kustom) dalam bentuk CSV. Fitur yang disediakan:
+
+- Parameterisasi file input sehingga nama file dapat diganti cepat.
+- Sanitasi nama kolom dan adaptasi ke struktur DataFrame yang kompatibel dengan QF-Lib.
+- Registry strategi Python di `src/strategy_backtest/strategies/` (misalnya `ema112_atr`
+  dengan entry EMA50 > EMA112 dan exit trailing stop ATR). Strategi dapat diganti cukup dengan
+  mengubah `STRATEGY_NAME` di sel parameter notebook.
+- `SignalBacktester` menghasilkan metrik QF-Lib, trade log lengkap, visualisasi entry/exit,
+  serta distribusi PnL.
+- Analisis trade rugi untuk menemukan pola kelemahan berdasarkan konteks indikator yang dicatat
+  strategi.
+- Eksperimen optimasi parameter (contohnya grid ATR multiplier) langsung dari notebook.
+
+> **Cara pakai singkat**: buka notebook, set `DATA_FILE`, pilih `STRATEGY_NAME` dan parameter
+> tambahannya, lalu jalankan seluruh sel. Notebook akan menampilkan trade log, grafik harga,
+> equity curve, serta tabel klasifikasi trade rugi dan eksperimen parameter.
 
 ## Data
 Letakkan file CSV historis BTCUSDT harian pada folder `data/` dengan nama `OKX_BTCUSDT, 1D.csv`.
