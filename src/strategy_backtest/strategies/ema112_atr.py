@@ -1,4 +1,4 @@
-"""EMA 112 trend-following strategy with ATR-based exit."""
+"""EMA 112 trend-following strategy with ATR-based risk management."""
 from __future__ import annotations
 
 import pandas as pd
@@ -28,48 +28,60 @@ def _atr(df: pd.DataFrame, window: int) -> pd.Series:
 
 
 class Strategy(StrategyBase):
-    """Go long on EMA 50 crossing above EMA 112; exit with ATR trailing stop."""
+    """Go long on EMA 112 momentum with asymmetric ATR stop/target management."""
 
     metadata = StrategyMetadata(
         name="ema112_atr",
         description=(
-            "Strategi trend-following yang menggunakan EMA 50 dan EMA 112 sebagai filter arah dan"
-            " trailing stop berbasis ATR untuk manajemen risiko."
+            "Strategi trend-following berbasis EMA 112 dengan fokus pada momentum harga dan"
+            " pengelolaan risiko fixed-R multiple menggunakan ATR harian."
         ),
         entry=(
-            "Entry long ketika EMA fast (50) menyilang ke atas EMA slow (112)."
-            " Sinyal ini menandakan perubahan tren ke arah bullish."
+            "Entry long ketika harga penutupan menembus ke atas EMA 112 dari posisi di bawahnya"
+            " dan EMA 112 sedang menanjak dalam jendela lookback yang ditentukan."
         ),
         exit=(
-            "Exit long ketika harga penutupan jatuh di bawah EMA slow dikurangi ATR * multiplier,"
-            " memberikan ruang bernapas sambil melindungi profit."
+            "Exit long ketika harga menutup di bawah level stop berbasis ATR (1R) atau mencapai"
+            " target keuntungan 2R, menghasilkan rasio risk-reward asimetris 1:2."
         ),
         parameters={
-            "fast_span": 50,
             "slow_span": 112,
             "atr_window": 14,
             "atr_multiplier": 1.5,
+            "risk_reward": 2.0,
+            "trend_lookback": 5,
         },
-        context_columns=("ema_fast", "ema_slow", "atr", "atr_trailing_stop"),
+        context_columns=(
+            "ema_trend",
+            "atr",
+            "atr_entry",
+            "active_entry_price",
+            "stop_level",
+            "target_level",
+            "exit_flag",
+        ),
     )
 
     def __init__(
         self,
-        fast_span: int = 50,
         slow_span: int = 112,
         atr_window: int = 14,
         atr_multiplier: float = 1.5,
+        risk_reward: float = 2.0,
+        trend_lookback: int = 5,
     ) -> None:
         super().__init__(
-            fast_span=fast_span,
             slow_span=slow_span,
             atr_window=atr_window,
             atr_multiplier=atr_multiplier,
+            risk_reward=risk_reward,
+            trend_lookback=trend_lookback,
         )
-        self.fast_span = fast_span
         self.slow_span = slow_span
         self.atr_window = atr_window
         self.atr_multiplier = atr_multiplier
+        self.risk_reward = risk_reward
+        self.trend_lookback = trend_lookback
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         required_cols = {"open", "high", "low", "close"}
@@ -78,29 +90,92 @@ class Strategy(StrategyBase):
             raise KeyError(f"DataFrame tidak memiliki kolom harga: {sorted(missing)}")
 
         close = data["close"].astype(float)
-        ema_fast = _ema(close, self.fast_span)
-        ema_slow = _ema(close, self.slow_span)
+        ema_trend = _ema(close, self.slow_span)
         atr = _atr(data, self.atr_window)
 
-        crossover = (ema_fast > ema_slow) & (ema_fast.shift(1) <= ema_slow.shift(1))
-        trailing_stop = ema_slow - self.atr_multiplier * atr
-        exit_signal = close < trailing_stop
+        index = data.index
+        cross_above = (close > ema_trend) & (close.shift(1) <= ema_trend.shift(1))
+        if self.trend_lookback > 0:
+            slope_filter = ema_trend > ema_trend.shift(self.trend_lookback)
+        else:
+            slope_filter = pd.Series(True, index=index)
+        volatility_filter = atr > 0
+        entry_condition = cross_above & slope_filter & volatility_filter
+
+        long_entry = pd.Series(False, index=index)
+        long_exit = pd.Series(False, index=index)
+        active_entry_price = pd.Series(float("nan"), index=index)
+        stop_level = pd.Series(float("nan"), index=index)
+        target_level = pd.Series(float("nan"), index=index)
+        atr_entry = pd.Series(float("nan"), index=index)
+        exit_flag = pd.Series("", index=index, dtype="object")
+
+        in_position = False
+        current_entry = float("nan")
+        current_stop = float("nan")
+        current_target = float("nan")
+        current_atr = float("nan")
+
+        for ts in index:
+            price = float(close.loc[ts])
+            atr_value = float(atr.loc[ts])
+
+            # Record current state for context before evaluating signals
+            active_entry_price.loc[ts] = current_entry
+            stop_level.loc[ts] = current_stop
+            target_level.loc[ts] = current_target
+            atr_entry.loc[ts] = current_atr
+
+            if in_position:
+                stop_hit = price <= current_stop
+                target_hit = price >= current_target
+                if stop_hit or target_hit:
+                    long_exit.loc[ts] = True
+                    exit_flag.loc[ts] = "target" if target_hit and not stop_hit else "stop"
+                    in_position = False
+                    current_entry = float("nan")
+                    current_stop = float("nan")
+                    current_target = float("nan")
+                    current_atr = float("nan")
+
+            if not in_position and bool(entry_condition.loc[ts]):
+                long_entry.loc[ts] = True
+                in_position = True
+                current_entry = price
+                current_atr = atr_value
+                risk_distance = self.atr_multiplier * current_atr
+                current_stop = current_entry - risk_distance
+                current_target = current_entry + self.risk_reward * risk_distance
+
+                active_entry_price.loc[ts] = current_entry
+                stop_level.loc[ts] = current_stop
+                target_level.loc[ts] = current_target
+                atr_entry.loc[ts] = current_atr
+
+        context = pd.DataFrame(
+            {
+                "ema_trend": ema_trend,
+                "atr": atr,
+                "atr_entry": atr_entry,
+                "active_entry_price": active_entry_price,
+                "stop_level": stop_level,
+                "target_level": target_level,
+                "exit_flag": exit_flag.where(exit_flag != "", other=pd.NA),
+            },
+            index=index,
+        )
 
         signals = pd.DataFrame(
             {
-                "long_entry": crossover,
-                "long_exit": exit_signal,
+                "long_entry": long_entry,
+                "long_exit": long_exit,
                 "short_entry": False,
                 "short_exit": False,
-                "ema_fast": ema_fast,
-                "ema_slow": ema_slow,
-                "atr": atr,
-                "atr_trailing_stop": trailing_stop,
             },
-            index=data.index,
+            index=index,
         )
 
-        return signals
+        return pd.concat([signals, context], axis=1)
 
 
 __all__ = ["Strategy"]

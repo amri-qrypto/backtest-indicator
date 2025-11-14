@@ -146,6 +146,11 @@ class SignalBacktester:
 
             if exit_trade and entry_idx is not None and entry_price is not None and entry_direction is not None:
                 exit_context = context.iloc[i] if context is not None else None
+                detailed_exit_reason = exit_reason
+                if exit_context is not None and "exit_flag" in exit_context.index:
+                    flag = exit_context.get("exit_flag")
+                    if flag is not None and not pd.isna(flag) and str(flag):
+                        detailed_exit_reason = f"{exit_reason}:{flag}"
                 trades.append(
                     self._build_trade_record(
                         trade_id=len(trades) + 1,
@@ -153,7 +158,7 @@ class SignalBacktester:
                         entry_index=entry_idx,
                         exit_index=i,
                         exit_price=price,
-                        exit_reason=exit_reason,
+                        exit_reason=detailed_exit_reason,
                         entry_price=entry_price,
                         entry_context=entry_context,
                         exit_context=exit_context,
@@ -265,10 +270,22 @@ class SignalBacktester:
         return results
 
     @staticmethod
-    def _context_to_dict(context: Optional[pd.Series]) -> Dict[str, float]:
+    def _context_to_dict(context: Optional[pd.Series]) -> Dict[str, object]:
         if context is None:
             return {}
-        return {key: float(value) if pd.notna(value) else np.nan for key, value in context.items()}
+        cleaned: Dict[str, object] = {}
+        for key, value in context.items():
+            if pd.isna(value):
+                cleaned[key] = np.nan
+                continue
+            if isinstance(value, str):
+                cleaned[key] = value
+                continue
+            try:
+                cleaned[key] = float(value)
+            except (TypeError, ValueError):
+                cleaned[key] = str(value)
+        return cleaned
 
     @staticmethod
     def _to_bool(series: Optional[pd.Series], index: pd.Index) -> pd.Series:
