@@ -2,6 +2,7 @@
 
 from .backtest import BacktestResult, performance_metrics, run_backtest
 from .data_loader import load_ohlcv_csv
+from .okx_data import OKXDataset, fetch_okx_ohlcv
 from .properties import StrategyProperties
 from .strategy import ema_vs_price_signals
 from .strategy_ema import ema_trend_signals
@@ -14,6 +15,8 @@ __all__ = [
     "run_backtest",
     "load_ohlcv_csv",
     "StrategyProperties",
+    "OKXDataset",
+    "fetch_okx_ohlcv",
     "ema_vs_price_signals",
     "ema_trend_signals",
     "TradeSummary",
