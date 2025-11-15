@@ -1,7 +1,7 @@
 """Registry of TradingView signal strategies."""
 from __future__ import annotations
 
-from importlib import import_module
+from importlib import import_module, reload
 from typing import Dict, Iterable, Type
 
 from .base import StrategyBase
@@ -21,15 +21,20 @@ def _load_strategy_class(name: str) -> Type[StrategyBase]:
         available = ", ".join(sorted(_STRATEGY_MODULES))
         raise KeyError(f"Strategi '{name}' tidak terdaftar. Pilihan: {available}") from exc
 
-    if name not in _CACHE:
-        module = import_module(module_path)
-        if not hasattr(module, "Strategy"):
-            raise AttributeError(f"Modul {module_path} tidak mendefinisikan kelas 'Strategy'")
-        strategy_cls = getattr(module, "Strategy")
-        if not issubclass(strategy_cls, StrategyBase):
-            raise TypeError(f"Strategy '{name}' harus mewarisi StrategyBase")
-        _CACHE[name] = strategy_cls
-    return _CACHE[name]
+    module = import_module(module_path)
+    # Selalu reload modul agar perubahan kode strategi langsung terambil
+    # tanpa perlu me-restart kernel notebook.
+    module = reload(module)
+
+    if not hasattr(module, "Strategy"):
+        raise AttributeError(f"Modul {module_path} tidak mendefinisikan kelas 'Strategy'")
+
+    strategy_cls = getattr(module, "Strategy")
+    if not issubclass(strategy_cls, StrategyBase):
+        raise TypeError(f"Strategy '{name}' harus mewarisi StrategyBase")
+
+    _CACHE[name] = strategy_cls
+    return strategy_cls
 
 
 def get_strategy(name: str, **kwargs) -> StrategyBase:
