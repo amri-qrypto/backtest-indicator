@@ -82,15 +82,7 @@ class SignalBacktester:
 
         results_df = self._build_backtest_frame(positions)
         metrics = qflib_metrics_from_returns(results_df["strategy_return"])
-
-        trade_summary = {
-            "total_trades": int(len(trades)),
-            "long_trades": int((trades["direction"] == "Long").sum()) if not trades.empty else 0,
-            "short_trades": int((trades["direction"] == "Short").sum()) if not trades.empty else 0,
-            "win_rate": float((trades["pnl_pct"] > 0).mean()) if not trades.empty else np.nan,
-            "avg_pnl_pct": float(trades["pnl_pct"].mean()) if not trades.empty else np.nan,
-            "median_bars": float(trades["bars_held"].median()) if not trades.empty else np.nan,
-        }
+        trade_summary = self._summarise_trades(trades, results_df["position"])
 
         return BacktestOutputs(
             positions=positions,
@@ -99,6 +91,167 @@ class SignalBacktester:
             metrics=metrics,
             trade_summary=trade_summary,
         )
+
+    @staticmethod
+    def _max_streak(mask: pd.Series) -> int:
+        max_streak = 0
+        current = 0
+        for flag in mask.astype(bool):
+            if flag:
+                current += 1
+                max_streak = max(max_streak, current)
+            else:
+                current = 0
+        return max_streak
+
+    def _summarise_trades(self, trades: pd.DataFrame, positions: pd.Series) -> Dict[str, float]:
+        total_trades = int(len(trades))
+        summary: Dict[str, float] = {"total_trades": total_trades}
+
+        total_bars = int(len(positions))
+        if total_bars > 0:
+            in_market = int((positions != 0).sum())
+            long_bars = int((positions > 0).sum())
+            short_bars = int((positions < 0).sum())
+            flat_bars = total_bars - in_market
+
+            summary.update(
+                {
+                    "bars_in_market": float(in_market),
+                    "bars_flat": float(flat_bars),
+                    "time_in_market_pct": float(in_market / total_bars),
+                    "flat_time_pct": float(flat_bars / total_bars),
+                    "long_exposure_pct": float(long_bars / total_bars),
+                    "short_exposure_pct": float(short_bars / total_bars),
+                    "avg_position": float(positions.mean()),
+                    "avg_abs_position": float(positions.abs().mean()),
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "bars_in_market": np.nan,
+                    "bars_flat": np.nan,
+                    "time_in_market_pct": np.nan,
+                    "flat_time_pct": np.nan,
+                    "long_exposure_pct": np.nan,
+                    "short_exposure_pct": np.nan,
+                    "avg_position": np.nan,
+                    "avg_abs_position": np.nan,
+                }
+            )
+
+        if trades.empty:
+            summary.update(
+                {
+                    "long_trades": 0,
+                    "short_trades": 0,
+                    "winning_trades": 0,
+                    "losing_trades": 0,
+                    "breakeven_trades": 0,
+                    "win_rate": np.nan,
+                    "loss_rate": np.nan,
+                    "breakeven_rate": np.nan,
+                    "avg_pnl_pct": np.nan,
+                    "avg_pnl_currency": np.nan,
+                    "median_pnl_pct": np.nan,
+                    "net_profit_pct": np.nan,
+                    "net_profit_currency": np.nan,
+                    "gross_profit_pct": np.nan,
+                    "gross_loss_pct": np.nan,
+                    "gross_profit_currency": np.nan,
+                    "gross_loss_currency": np.nan,
+                    "profit_factor_pct": np.nan,
+                    "profit_factor_currency": np.nan,
+                    "avg_win_pct": np.nan,
+                    "avg_loss_pct": np.nan,
+                    "avg_win_currency": np.nan,
+                    "avg_loss_currency": np.nan,
+                    "avg_bars": np.nan,
+                    "median_bars": np.nan,
+                    "avg_bars_winning": np.nan,
+                    "avg_bars_losing": np.nan,
+                    "max_consecutive_wins": 0,
+                    "max_consecutive_losses": 0,
+                    "long_short_ratio": np.nan,
+                    "best_trade_pct": np.nan,
+                    "worst_trade_pct": np.nan,
+                    "best_trade_currency": np.nan,
+                    "worst_trade_currency": np.nan,
+                }
+            )
+            return summary
+
+        long_trades = int((trades["direction"] == "Long").sum())
+        short_trades = int((trades["direction"] == "Short").sum())
+
+        pnl_pct = trades["pnl_pct"].astype(float)
+        pnl_currency = trades["pnl_currency"].astype(float)
+        bars_held = trades["bars_held"].astype(float)
+
+        winning_mask = pnl_pct > 0
+        losing_mask = pnl_pct < 0
+        breakeven_mask = ~(winning_mask | losing_mask)
+
+        winning_trades = int(winning_mask.sum())
+        losing_trades = int(losing_mask.sum())
+        breakeven_trades = int(breakeven_mask.sum())
+
+        wins_pct = pnl_pct[winning_mask]
+        losses_pct = pnl_pct[losing_mask]
+        wins_cur = pnl_currency[winning_mask]
+        losses_cur = pnl_currency[losing_mask]
+
+        gross_profit_pct = float(wins_pct.sum()) if winning_trades else 0.0
+        gross_loss_pct = float(-losses_pct.sum()) if losing_trades else 0.0
+        gross_profit_currency = float(wins_cur.sum()) if winning_trades else 0.0
+        gross_loss_currency = float(-losses_cur.sum()) if losing_trades else 0.0
+
+        profit_factor_pct = gross_profit_pct / gross_loss_pct if gross_loss_pct > 0 else np.nan
+        profit_factor_currency = (
+            gross_profit_currency / gross_loss_currency if gross_loss_currency > 0 else np.nan
+        )
+
+        summary.update(
+            {
+                "long_trades": long_trades,
+                "short_trades": short_trades,
+                "winning_trades": winning_trades,
+                "losing_trades": losing_trades,
+                "breakeven_trades": breakeven_trades,
+                "win_rate": float(winning_trades / total_trades) if total_trades else np.nan,
+                "loss_rate": float(losing_trades / total_trades) if total_trades else np.nan,
+                "breakeven_rate": float(breakeven_trades / total_trades) if total_trades else np.nan,
+                "avg_pnl_pct": float(pnl_pct.mean()),
+                "avg_pnl_currency": float(pnl_currency.mean()),
+                "median_pnl_pct": float(pnl_pct.median()),
+                "net_profit_pct": float(pnl_pct.sum()),
+                "net_profit_currency": float(pnl_currency.sum()),
+                "gross_profit_pct": gross_profit_pct,
+                "gross_loss_pct": gross_loss_pct,
+                "gross_profit_currency": gross_profit_currency,
+                "gross_loss_currency": gross_loss_currency,
+                "profit_factor_pct": profit_factor_pct,
+                "profit_factor_currency": profit_factor_currency,
+                "avg_win_pct": float(wins_pct.mean()) if winning_trades else np.nan,
+                "avg_loss_pct": float(losses_pct.mean()) if losing_trades else np.nan,
+                "avg_win_currency": float(wins_cur.mean()) if winning_trades else np.nan,
+                "avg_loss_currency": float(losses_cur.mean()) if losing_trades else np.nan,
+                "avg_bars": float(bars_held.mean()),
+                "median_bars": float(bars_held.median()),
+                "avg_bars_winning": float(bars_held[winning_mask].mean()) if winning_trades else np.nan,
+                "avg_bars_losing": float(bars_held[losing_mask].mean()) if losing_trades else np.nan,
+                "max_consecutive_wins": float(self._max_streak(winning_mask)),
+                "max_consecutive_losses": float(self._max_streak(losing_mask)),
+                "long_short_ratio": float(long_trades / short_trades) if short_trades else np.nan,
+                "best_trade_pct": float(pnl_pct.max()),
+                "worst_trade_pct": float(pnl_pct.min()),
+                "best_trade_currency": float(pnl_currency.max()),
+                "worst_trade_currency": float(pnl_currency.min()),
+            }
+        )
+
+        return summary
 
     def _simulate_trades(
         self,
