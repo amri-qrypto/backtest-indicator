@@ -64,24 +64,25 @@ class Strategy(StrategyBase):
     metadata = StrategyMetadata(
         name="vwap",
         description=(
-            "Strategi VWAP mean reversion: beli ketika harga di bawah VWAP dengan RSI bullish, "
-            "jual ketika harga di atas VWAP dengan RSI bearish."
+            "Strategi VWAP mean reversion: beli ketika harga di bawah VWAP dengan RSI rebound bullish, "
+            "jual ketika harga di atas VWAP dengan RSI bearish dari area jenuh beli."
         ),
         entry=(
-            "Long: harga penutupan di bawah VWAP, RSI di atas level oversold, dan RSI menembus ke atas level 50. "
-            "Short: harga penutupan di atas VWAP, RSI di bawah level overbought, dan RSI menembus ke bawah level 50."
+            "Long: harga penutupan di bawah VWAP, RSI sebelumnya berada di bawah level oversold lalu menembus ke atas level 50. "
+            "Short: harga penutupan di atas VWAP, RSI sebelumnya berada di atas level overbought lalu menembus ke bawah level 50."
         ),
         exit=(
-            "Stop loss berbasis ATR: posisi long keluar jika harga menyentuh entry - ATR*multiplier, "
-            "posisi short keluar jika harga menyentuh entry + ATR*multiplier. Tidak ada target profit eksplisit."
+            "Stop loss berbasis ATR yang dieksekusi pada penembusan high/low harian ditambah trailing stop opsional."
         ),
         parameters={
             "rsi_length": 14,
-            "rsi_overbought": 70,
-            "rsi_oversold": 30,
+            "rsi_overbought": 60,
+            "rsi_oversold": 40,
             "atr_length": 14,
             "atr_stop_multiplier": 1.5,
             "session_frequency": "1D",
+            "trail_activation_multiple": 1.0,
+            "trail_atr_multiplier": 1.0,
         },
         context_columns=(
             "vwap",
@@ -90,6 +91,8 @@ class Strategy(StrategyBase):
             "active_entry_price",
             "stop_level",
             "position",
+            "best_price",
+            "trail_active",
         ),
     )
 
@@ -101,6 +104,8 @@ class Strategy(StrategyBase):
         atr_length: int = 14,
         atr_stop_multiplier: float = 1.5,
         session_frequency: str = "1D",
+        trail_activation_multiple: float = 1.0,
+        trail_atr_multiplier: float = 1.0,
     ) -> None:
         super().__init__(
             rsi_length=rsi_length,
@@ -109,6 +114,8 @@ class Strategy(StrategyBase):
             atr_length=atr_length,
             atr_stop_multiplier=atr_stop_multiplier,
             session_frequency=session_frequency,
+            trail_activation_multiple=trail_activation_multiple,
+            trail_atr_multiplier=trail_atr_multiplier,
         )
         self.rsi_length = rsi_length
         self.rsi_overbought = rsi_overbought
@@ -116,6 +123,8 @@ class Strategy(StrategyBase):
         self.atr_length = atr_length
         self.atr_stop_multiplier = atr_stop_multiplier
         self.session_frequency = session_frequency
+        self.trail_activation_multiple = trail_activation_multiple
+        self.trail_atr_multiplier = trail_atr_multiplier
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         required_cols = {"open", "high", "low", "close", "volume"}
@@ -124,6 +133,8 @@ class Strategy(StrategyBase):
             raise KeyError(f"DataFrame tidak memiliki kolom harga/volume: {sorted(missing)}")
 
         close = data["close"].astype(float)
+        high = data["high"].astype(float)
+        low = data["low"].astype(float)
         vwap = _session_vwap(data, self.session_frequency)
         rsi = _rsi(close, self.rsi_length)
         atr = _atr(data, self.atr_length)
@@ -133,12 +144,12 @@ class Strategy(StrategyBase):
 
         long_condition = (
             (close < vwap)
-            & (rsi > self.rsi_oversold)
+            & (rsi.shift(1) < self.rsi_oversold)
             & rsi_cross_up
         ).fillna(False)
         short_condition = (
             (close > vwap)
-            & (rsi < self.rsi_overbought)
+            & (rsi.shift(1) > self.rsi_overbought)
             & rsi_cross_down
         ).fillna(False)
 
@@ -151,46 +162,89 @@ class Strategy(StrategyBase):
         active_entry_price = pd.Series(float("nan"), index=index)
         stop_level = pd.Series(float("nan"), index=index)
         position_context = pd.Series("flat", index=index, dtype="object")
+        best_price_context = pd.Series(float("nan"), index=index)
+        trail_active_context = pd.Series(False, index=index)
 
         position: Optional[str] = None
         current_entry = float("nan")
         current_stop = float("nan")
+        entry_atr_value = float("nan")
+        position_best_price = float("nan")
+        trail_active_state = False
 
         for ts in index:
             price = float(close.loc[ts])
             atr_value = float(atr.loc[ts]) if pd.notna(atr.loc[ts]) else float("nan")
-
-            active_entry_price.loc[ts] = current_entry
-            stop_level.loc[ts] = current_stop
-            position_context.loc[ts] = position or "flat"
+            bar_high = float(high.loc[ts])
+            bar_low = float(low.loc[ts])
 
             if position == "long":
-                if price <= current_stop:
+                position_best_price = (
+                    max(position_best_price, bar_high)
+                    if np.isfinite(position_best_price)
+                    else bar_high
+                )
+                if (
+                    np.isfinite(self.trail_activation_multiple)
+                    and np.isfinite(entry_atr_value)
+                    and entry_atr_value > 0
+                    and np.isfinite(atr_value)
+                    and atr_value > 0
+                ):
+                    mfe = position_best_price - current_entry
+                    if mfe >= self.trail_activation_multiple * entry_atr_value:
+                        trail_active_state = True
+                        trail_stop = position_best_price - self.trail_atr_multiplier * atr_value
+                        if np.isfinite(trail_stop):
+                            current_stop = max(current_stop, trail_stop)
+                if bar_low <= current_stop:
                     long_exit.loc[ts] = True
                     position = None
             elif position == "short":
-                if price >= current_stop:
+                position_best_price = (
+                    min(position_best_price, bar_low)
+                    if np.isfinite(position_best_price)
+                    else bar_low
+                )
+                if (
+                    np.isfinite(self.trail_activation_multiple)
+                    and np.isfinite(entry_atr_value)
+                    and entry_atr_value > 0
+                    and np.isfinite(atr_value)
+                    and atr_value > 0
+                ):
+                    mfe = current_entry - position_best_price
+                    if mfe >= self.trail_activation_multiple * entry_atr_value:
+                        trail_active_state = True
+                        trail_stop = position_best_price + self.trail_atr_multiplier * atr_value
+                        if np.isfinite(trail_stop):
+                            current_stop = min(current_stop, trail_stop)
+                if bar_high >= current_stop:
                     short_exit.loc[ts] = True
                     position = None
 
             if position is None:
                 current_entry = float("nan")
                 current_stop = float("nan")
+                position_best_price = float("nan")
+                entry_atr_value = float("nan")
+                trail_active_state = False
 
                 if bool(long_condition.loc[ts]) and np.isfinite(atr_value) and atr_value > 0:
                     long_entry.loc[ts] = True
                     position = "long"
                     current_entry = price
                     current_stop = current_entry - self.atr_stop_multiplier * atr_value
+                    entry_atr_value = atr_value
+                    position_best_price = bar_high
                 elif bool(short_condition.loc[ts]) and np.isfinite(atr_value) and atr_value > 0:
                     short_entry.loc[ts] = True
                     position = "short"
                     current_entry = price
                     current_stop = current_entry + self.atr_stop_multiplier * atr_value
+                    entry_atr_value = atr_value
+                    position_best_price = bar_low
 
-                active_entry_price.loc[ts] = current_entry
-                stop_level.loc[ts] = current_stop
-                position_context.loc[ts] = position or "flat"
             else:
                 # handle potential flip if opposite signal appears
                 if position == "long" and bool(short_condition.loc[ts]) and np.isfinite(atr_value) and atr_value > 0:
@@ -199,16 +253,24 @@ class Strategy(StrategyBase):
                     position = "short"
                     current_entry = price
                     current_stop = current_entry + self.atr_stop_multiplier * atr_value
+                    entry_atr_value = atr_value
+                    position_best_price = bar_low
+                    trail_active_state = False
                 elif position == "short" and bool(long_condition.loc[ts]) and np.isfinite(atr_value) and atr_value > 0:
                     short_exit.loc[ts] = True
                     long_entry.loc[ts] = True
                     position = "long"
                     current_entry = price
                     current_stop = current_entry - self.atr_stop_multiplier * atr_value
+                    entry_atr_value = atr_value
+                    position_best_price = bar_high
+                    trail_active_state = False
 
-                active_entry_price.loc[ts] = current_entry
-                stop_level.loc[ts] = current_stop
-                position_context.loc[ts] = position or "flat"
+            active_entry_price.loc[ts] = current_entry
+            stop_level.loc[ts] = current_stop
+            position_context.loc[ts] = position or "flat"
+            best_price_context.loc[ts] = position_best_price
+            trail_active_context.loc[ts] = trail_active_state
 
         context = pd.DataFrame(
             {
@@ -218,6 +280,8 @@ class Strategy(StrategyBase):
                 "active_entry_price": active_entry_price,
                 "stop_level": stop_level,
                 "position": position_context,
+                "best_price": best_price_context,
+                "trail_active": trail_active_context,
             },
             index=index,
         )
