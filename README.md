@@ -1,146 +1,104 @@
 # BTCUSDT Strategy Backtesting (EMA, MACD, ATR & Mean Reversion)
 
 ## Ringkasan
-Proyek ini mengevaluasi berbagai strategi trading BTCUSDT harian menggunakan Python, pandas,
-dan metrik performa QF-Lib. Dua alur utama yang disediakan adalah:
-
-1. **Strategi terprogram** – kumpulan notebook pada folder `notebooks/` yang menghitung indikator
-   (EMA, MACD, ATR, mean reversion) langsung di Python lalu menjalankan _vectorized backtest_.
-2. **Analisis sinyal TradingView** – notebook `backtest-strategy.ipynb` memuat sinyal siap pakai
-   dari file CSV TradingView, mengonversinya ke struktur QF-Lib, menjalankan strategi Python yang
-   bisa dipilih dari folder `src/strategy_backtest/`, lalu menyajikan trade log, visualisasi,
-   klasifikasi kegagalan, dan eksperimen optimasi parameter.
+Proyek ini sekarang dipusatkan pada pipeline `run_single_asset_pipeline` di
+`src/pipelines/single_asset.py`. Pipeline tersebut memuat data OHLCV, menghitung indikator
+opsional, menjalankan strategi dari registry TradingView (`src/strategy_backtest/`), dan
+mengembalikan metrik performa lengkap. Seluruh notebook telah disederhanakan sehingga cukup
+mengubah sel konfigurasi `CONFIG` untuk menjalankan eksperimen baru. Selain itu tersedia CLI
+`python -m src.cli.run_single_asset` dan dataset mini agar eksperimen dapat dijalankan tanpa
+notebook sekaligus dapat dites otomatis lewat pytest.
 
 ## Fitur Utama
-- 📈 **Koleksi strategi**: EMA trend following (50, 112, hasil optimasi 45), MACD crossover,
-  mean reversion oversold, serta filter tren berbasis ATR.
-- 🧮 **Evaluasi kuantitatif**: semua strategi dinilai dengan `qflib_metrics_from_returns`
-  yang mengekstrak statistik TimeseriesAnalysis.
-- 🔍 **Optimasi parameter**: notebook `ema_optimization.ipynb` menjalankan grid search
-  EMA 20–200; hasil terbaik (EMA 45) disertakan dalam perbandingan final.
-- 📊 **Perbandingan menyeluruh**: `strategy_comparison.ipynb` menggabungkan Sharpe,
-  CAGR, drawdown, dan volatilitas dari seluruh strategi.
-- 🗂️ **Playground sinyal TradingView**: `backtest-strategy.ipynb` menerima file CSV hasil
-  ekspor TradingView, menafsirkan kolom sinyal long/short, memilih strategi Python (misalnya
-  EMA112 + ATR exit atau MACD crossover) dari registry, lalu menjalankan backtest dengan metrik QF-Lib sekaligus
-  analisis trade kalah dan ide optimasi.
+- 📦 **Pipeline tunggal** – `SingleAssetPipelineConfig` merangkum seluruh parameter (lokasi data,
+  strategi, indikator tambahan, dan horizon). Pipeline mengembalikan objek `BacktestOutputs`
+  berisi metrik, trade log, kurva ekuitas, dan ringkasan statistik siap pakai.
+- 🗒️ **Notebook parametrik** – setiap notebook di `notebooks/` hanya berisi tiga sel: import,
+  konfigurasi `CONFIG`, dan eksekusi pipeline. Mengganti path data atau nama strategi tidak lagi
+  membutuhkan modifikasi kode manual.
+- 💻 **CLI untuk eksperimen cepat** – `python -m src.cli.run_single_asset CONFIG.json` membaca file
+  konfigurasi JSON/YAML (contoh tersedia di `configs/ema50_daily.json`) dan otomatis menyimpan
+  metrik, log trade, serta grafik ekuitas ke folder yang ditentukan.
+- ✅ **Dataset mini + pytest** – file `tests/fixtures/mini_ohlcv.csv` menyediakan OHLCV sintetis
+  sehingga pipeline dapat diuji otomatis. Test `tests/test_pipeline.py` memastikan jumlah trade,
+  Sharpe ratio, dan artefak ekspor valid.
+- 📊 **Evaluasi kuantitatif** – metrik dihitung via `qflib_metrics_from_returns` (dengan fallback
+  pandas/numpy) sehingga Sharpe, CAGR, drawdown, dan volatilitas tersedia di mana pun pipeline
+  dipanggil.
 
 ## Struktur Folder
 ```
 project-root/
-├─ data/
-│  └─ OKX_BTCUSDT, 1D.csv
-├─ notebooks/
-│  ├─ ema_112.ipynb
-│  ├─ ema_optimization.ipynb
-│  ├─ ema_vs_price_backtest.ipynb
-│  ├─ strategy_atr_filter.ipynb
-│  ├─ strategy_comparison.ipynb
-│  ├─ strategy_ema.ipynb
-│  ├─ strategy_macd.ipynb
-│  ├─ strategy_oversold_mean_rev.ipynb
-│  └─ backtest-strategy.ipynb
+├─ configs/                 # Contoh file konfigurasi untuk CLI
+├─ data/                    # Dataset mentah (OKX, sample 1H, dsb.)
+├─ notebooks/               # Notebook parametris dengan sel CONFIG
+├─ outputs/                 # Folder default penyimpanan artefak
 ├─ src/
-│  ├─ __init__.py
-│  ├─ backtest.py
-│  ├─ data_loader.py
-│  ├─ indicators.py
-│  ├─ qflib_adapters.py
-│  ├─ qflib_metrics.py
-│  ├─ strategy.py
-│  ├─ strategy_atr_filter.py
-│  ├─ strategy_backtest/
-│  │  ├─ __init__.py
-│  │  ├─ base.py
-│  │  ├─ pipeline.py
-│  │  ├─ registry.py
-│  │  ├─ utils.py
-│  │  └─ strategies/
-│  │     └─ ema112_atr.py
-│  ├─ strategy_macd.py
-│  └─ strategy_oversold.py
+│  ├─ cli/run_single_asset.py
+│  ├─ pipelines/single_asset.py
+│  ├─ strategy_backtest/...
+│  └─ strategi lainnya (ema, macd, atr, oversold)
+├─ tests/
+│  ├─ fixtures/mini_ohlcv.csv
+│  └─ test_pipeline.py
 ├─ requirements.txt
 └─ README.md
 ```
 
 ## Instalasi
-1. Pastikan Python 3.10+ terinstal.
+1. Pastikan Python 3.10+ tersedia.
 2. Instal dependensi:
    ```bash
    pip install -r requirements.txt
    ```
 
-## Menjalankan JupyterLab
-1. Jalankan perintah berikut:
+## Workflow Notebook
+1. Jalankan `jupyter lab` dari root proyek.
+2. Buka notebook apa pun di `notebooks/`. Sel pertama menyiapkan path & import pipeline.
+3. Ubah nilai pada dictionary `CONFIG` di sel kedua (mis. `data_path`, `strategy_name`, parameter
+   strategi, indikator tambahan, horizon data, atau lokasi penyimpanan artefak).
+4. Jalankan sel eksekusi untuk melihat metrik, ringkasan trade, dan file artefak yang tersimpan.
+
+## Menjalankan Pipeline via CLI
+1. Siapkan file konfigurasi JSON/YAML mengikuti struktur `configs/ema50_daily.json`.
+2. Jalankan perintah:
    ```bash
-   jupyter lab
+   python -m src.cli.run_single_asset configs/ema50_daily.json
    ```
-2. Buka notebook apa pun di folder `notebooks/` untuk mengeksplorasi strategi.
+3. Gunakan opsi tambahan bila diperlukan:
+   - `--output-dir <path>` untuk mengganti folder tujuan.
+   - `--prefix <nama>` untuk mengganti prefix file output.
+   - `--skip-save` jika hanya ingin melihat ringkasan tanpa menyimpan artefak.
 
-## Alur Notebook
-- `ema_vs_price_backtest.ipynb`: pengantar strategi EMA dasar (EMA 50).
-- `ema_112.ipynb`: grid search sekitar EMA 112 dan evaluasi performa QF-Lib.
-- `ema_optimization.ipynb`: grid search luas EMA 20–200 untuk menemukan periode terbaik.
-- `strategy_ema.ipynb`: contoh langkah penuh EMA trend following.
-- `strategy_macd.ipynb`: sinyal MACD fast/slow + signal line.
-- `strategy_oversold_mean_rev.ipynb`: pendekatan mean reversion berbasis indikator oversold.
-- `strategy_atr_filter.ipynb`: filter tren dengan ATR dan median volatilitas.
-- `strategy_comparison.ipynb`: final dashboard Sharpe, CAGR, drawdown, dan volatilitas dari seluruh strategi.
-- `backtest-strategy.ipynb`: playground generik untuk menguji sinyal dari file CSV TradingView.
+Output CLI akan mencetak jumlah trade, Sharpe ratio, CAGR, dan lokasi file `*_metrics.json`,
+`*_trades.csv`, serta `*_equity.png` yang dihasilkan oleh `save_backtest_outputs`.
 
-## TradingView Strategy Playground
-
-Notebook `backtest-strategy.ipynb` ditujukan bagi pengguna yang telah memiliki sinyal strategi
-dari TradingView (misalnya hasil indikator kustom) dalam bentuk CSV. Fitur yang disediakan:
-
-- Parameterisasi file input sehingga nama file dapat diganti cepat.
-- Sanitasi nama kolom dan adaptasi ke struktur DataFrame yang kompatibel dengan QF-Lib.
-- Registry strategi Python di `src/strategy_backtest/strategies/` (misalnya `ema112_atr`,
-  `ema50`, `macd`, `atr_filter`, hingga mean reversion `oversold`). Strategi dapat diganti cukup
-  dengan mengubah `STRATEGY_NAME` di sel parameter notebook.
-- `SignalBacktester` menghasilkan metrik QF-Lib, trade log lengkap, visualisasi entry/exit,
-  serta distribusi PnL.
-- Analisis trade rugi untuk menemukan pola kelemahan berdasarkan konteks indikator yang dicatat
-  strategi.
-- Eksperimen optimasi parameter (contohnya grid ATR multiplier) langsung dari notebook.
-
-> **Cara pakai singkat**: buka notebook, set `DATA_FILE`, pilih `STRATEGY_NAME` dan parameter
-> tambahannya, lalu jalankan seluruh sel. Notebook akan menampilkan trade log, grafik harga,
-> equity curve, serta tabel klasifikasi trade rugi dan eksperimen parameter.
-
-### Strategi & Parameter yang Tersedia
-
-Setiap strategi pada registry mendefinisikan metadata entry/exit serta kolom konteks yang otomatis
-ditulis ke trade log `SignalBacktester`. Daftar lengkapnya:
-
-| Nama strategi | Ringkasan aturan | Parameter kunci |
-| ------------- | ---------------- | --------------- |
-| `ema45` | Long ketika penutupan di atas EMA45 hasil optimasi. | `ema_length`, `price_column` |
-| `ema50` | Versi EMA klasik dengan filter 50-bar. | `ema_length`, `price_column` |
-| `ema112` | Tren jangka panjang menggunakan EMA112. | `ema_length`, `price_column` |
-| `macd` | Entry saat garis MACD melintasi ke atas garis sinyal. | `price_column`, `fast_span`, `slow_span`, `signal_span` |
-| `atr_filter` | Long jika harga di atas EMA dan ATR > median rolling. | `price_column`, `ema_span`, `atr_period`, `median_window` |
-| `oversold` | Mean reversion berdasarkan kolom oversold/overbought TradingView. | `entry_column`, `exit_column` |
-| `ema112_atr` | EMA112 dengan stop ATR adaptif dan opsi auto flip. | `ema_length`, `atr_length`, `atr_multiplier`, `reentry_enabled` |
-| `vwap` | VWAP mean reversion + filter RSI serta stop ATR. | `rsi_length`, `rsi_overbought`, `rsi_oversold`, `atr_length`, `atr_stop_multiplier`, `session_frequency` |
-
-Seluruh strategi di atas dapat langsung dipanggil lewat `src/strategy_backtest/registry.get_strategy`
-atau notebook `backtest-strategy.ipynb`, lalu dikombinasikan dengan eksperimen parameter.
+## Pengujian
+Dataset sintetis pada `tests/fixtures/mini_ohlcv.csv` memudahkan verifikasi pipeline. Jalankan:
+```bash
+pytest
+```
+Test `tests/test_pipeline.py` memanggil pipeline dengan strategi EMA50, mengecek jumlah trade,
+Sharpe ratio tidak NaN, dan memastikan fungsi `save_backtest_outputs` membuat file metrik, trade
+log, serta grafik ekuitas.
 
 ## Data
-Letakkan file CSV historis BTCUSDT harian pada folder `data/` dengan nama `OKX_BTCUSDT, 1D.csv`.
-Kolom wajib mencakup `time` (UNIX detik), `open`, `high`, `low`, `close`, serta kolom tambahan
-apabila diperlukan oleh strategi (mis. sinyal oversold).
+Letakkan file CSV historis pada folder `data/` dengan kolom minimal `time`, `open`, `high`, `low`,
+`close`, dan `volume`. File bawaan repo mencakup `OKX_BTCUSDT, 1D.csv`, `OKX_ETHUSDT.P, 1D.csv`,
+dan `sample_1h_data.csv`. Untuk unit test, gunakan `tests/fixtures/mini_ohlcv.csv` yang sudah
+mengandung kolom indikator dasar (EMA, MACD, ATR) sehingga strategi apa pun dapat dijalankan.
 
-## Cara Kerja Backtest
-1. Muat data melalui `load_ohlcv_csv`.
-2. Hitung indikator (EMA, MACD, ATR, dsb.) dari modul `src/`.
-3. Bentuk sinyal long/cash menggunakan fungsi strategi terkait.
-4. Jalankan `run_backtest` untuk menghasilkan _equity curve_, _strategy return_, dan biaya trading.
-5. Evaluasi performa via `qflib_metrics_from_returns` atau `performance_metrics`.
-6. Visualisasikan harga, indikator, posisi, dan kurva ekuitas.
+## Cara Kerja Pipeline
+1. `load_ohlcv_csv` membersihkan data dan memastikan kolom numerik siap pakai.
+2. `_apply_indicators` (opsional) menghitung indikator tambahan berdasarkan daftar
+   `IndicatorConfig` pada `SingleAssetPipelineConfig`.
+3. `get_strategy` dari `src/strategy_backtest/registry.py` menginisialisasi strategi TradingView.
+4. Strategi menghasilkan DataFrame sinyal (`long_entry`, `long_exit`, dll.) yang dieksekusi oleh
+   `SignalBacktester`.
+5. `qflib_metrics_from_returns` menghitung metrik performa, sedangkan `save_backtest_outputs`
+   menyimpan JSON metrik, CSV trade log, dan grafik kurva ekuitas.
 
 ## Keterbatasan
-- Tidak memasukkan slippage, likuiditas, maupun biaya trading realistis.
-- Hanya mendukung posisi long (tidak ada short/leverage).
-- Backtest bersifat historis; validasi out-of-sample tetap diperlukan sebelum implementasi live.
+- Tidak memperhitungkan slippage, likuiditas, maupun biaya trading riil.
+- Mayoritas strategi bersifat long-only.
+- Backtest tetap memerlukan validasi out-of-sample sebelum implementasi live.

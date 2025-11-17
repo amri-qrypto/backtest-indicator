@@ -4,3 +4,4 @@ matplotlib
 python-dateutil
 qf-lib
 jupyterlab
+PyYAML

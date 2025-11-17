@@ -1,0 +1,22 @@
+{
+  "data_path": "data/OKX_ETHUSDT.P, 1D.csv",
+  "strategy_name": "ema50",
+  "strategy_kwargs": {
+    "ema_length": 50
+  },
+  "price_column": "close",
+  "horizon_bars": 500,
+  "indicators": [
+    {
+      "name": "ema",
+      "source_column": "close",
+      "target_column": "ema_reference",
+      "params": {
+        "span": 50
+      }
+    }
+  ],
+  "output_dir": "outputs/cli_runs",
+  "output_prefix": "ema50_daily",
+  "save_outputs": true
+}
