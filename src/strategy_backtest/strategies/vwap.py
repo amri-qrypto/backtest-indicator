@@ -99,8 +99,8 @@ class Strategy(StrategyBase):
     def __init__(
         self,
         rsi_length: int = 14,
-        rsi_overbought: int = 70,
-        rsi_oversold: int = 30,
+        rsi_overbought: int = 60,
+        rsi_oversold: int = 40,
         atr_length: int = 14,
         atr_stop_multiplier: float = 1.5,
         session_frequency: str = "1D",
@@ -139,19 +139,59 @@ class Strategy(StrategyBase):
         rsi = _rsi(close, self.rsi_length)
         atr = _atr(data, self.atr_length)
 
-        rsi_cross_up = (rsi > 50) & (rsi.shift(1) <= 50)
-        rsi_cross_down = (rsi < 50) & (rsi.shift(1) >= 50)
+        long_condition = pd.Series(False, index=data.index)
+        short_condition = pd.Series(False, index=data.index)
 
-        long_condition = (
-            (close < vwap)
-            & (rsi.shift(1) < self.rsi_oversold)
-            & rsi_cross_up
-        ).fillna(False)
-        short_condition = (
-            (close > vwap)
-            & (rsi.shift(1) > self.rsi_overbought)
-            & rsi_cross_down
-        ).fillna(False)
+        prev_rsi = float("nan")
+        long_ready = False
+        short_ready = False
+        for ts in data.index:
+            rsi_value = float(rsi.loc[ts]) if pd.notna(rsi.loc[ts]) else float("nan")
+            close_value = float(close.loc[ts]) if pd.notna(close.loc[ts]) else float("nan")
+            vwap_value = float(vwap.loc[ts]) if pd.notna(vwap.loc[ts]) else float("nan")
+
+            rsi_cross_up = (
+                np.isfinite(prev_rsi)
+                and np.isfinite(rsi_value)
+                and prev_rsi <= 50
+                and rsi_value > 50
+            )
+            rsi_cross_down = (
+                np.isfinite(prev_rsi)
+                and np.isfinite(rsi_value)
+                and prev_rsi >= 50
+                and rsi_value < 50
+            )
+
+            if np.isfinite(rsi_value):
+                if rsi_value <= self.rsi_oversold:
+                    long_ready = True
+                if rsi_value >= self.rsi_overbought:
+                    short_ready = True
+
+            price_below_vwap = (
+                np.isfinite(close_value)
+                and np.isfinite(vwap_value)
+                and close_value < vwap_value
+            )
+            price_above_vwap = (
+                np.isfinite(close_value)
+                and np.isfinite(vwap_value)
+                and close_value > vwap_value
+            )
+
+            if long_ready and rsi_cross_up and price_below_vwap:
+                long_condition.loc[ts] = True
+            if short_ready and rsi_cross_down and price_above_vwap:
+                short_condition.loc[ts] = True
+
+            if rsi_cross_up:
+                long_ready = False
+            if rsi_cross_down:
+                short_ready = False
+
+            if np.isfinite(rsi_value):
+                prev_rsi = rsi_value
 
         index = data.index
         long_entry = pd.Series(False, index=index)
