@@ -78,4 +78,27 @@ def load_strategy_csv(
     return df, mapping
 
 
-__all__ = ["sanitise_column_name", "sanitise_columns", "load_strategy_csv"]
+def build_long_only_signals(
+    long_condition: pd.Series,
+) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """Convert a boolean long condition into entry/exit boolean series."""
+
+    condition = long_condition.fillna(False).astype(bool)
+    prev = condition.shift(1).fillna(False)
+
+    long_entry = (condition & ~prev).astype(bool)
+    long_exit = ((~condition) & prev).astype(bool)
+    index = condition.index
+    short_entry = pd.Series(False, index=index, dtype=bool)
+    short_exit = pd.Series(False, index=index, dtype=bool)
+    position = condition.astype(int)
+
+    return long_entry, long_exit, short_entry, short_exit, position
+
+
+__all__ = [
+    "sanitise_column_name",
+    "sanitise_columns",
+    "load_strategy_csv",
+    "build_long_only_signals",
+]

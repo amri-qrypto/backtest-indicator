@@ -8,6 +8,12 @@ from .base import StrategyBase
 
 _STRATEGY_MODULES = {
     "ema112_atr": "src.strategy_backtest.strategies.ema112_atr",
+    "ema112": "src.strategy_ema112",
+    "ema50": "src.strategy_ema50",
+    "ema45": "src.strategy_ema45",
+    "atr_filter": "src.strategy_atr_filter",
+    "macd": "src.strategy_macd",
+    "oversold": "src.strategy_oversold",
     "vwap": "src.strategy_backtest.strategies.vwap",
 }
 

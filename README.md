@@ -22,7 +22,7 @@ dan metrik performa QF-Lib. Dua alur utama yang disediakan adalah:
   CAGR, drawdown, dan volatilitas dari seluruh strategi.
 - 🗂️ **Playground sinyal TradingView**: `backtest-strategy.ipynb` menerima file CSV hasil
   ekspor TradingView, menafsirkan kolom sinyal long/short, memilih strategi Python (misalnya
-  EMA112 + ATR exit) dari registry, lalu menjalankan backtest dengan metrik QF-Lib sekaligus
+  EMA112 + ATR exit atau MACD crossover) dari registry, lalu menjalankan backtest dengan metrik QF-Lib sekaligus
   analisis trade kalah dan ide optimasi.
 
 ## Struktur Folder
@@ -95,9 +95,9 @@ dari TradingView (misalnya hasil indikator kustom) dalam bentuk CSV. Fitur yang 
 
 - Parameterisasi file input sehingga nama file dapat diganti cepat.
 - Sanitasi nama kolom dan adaptasi ke struktur DataFrame yang kompatibel dengan QF-Lib.
-- Registry strategi Python di `src/strategy_backtest/strategies/` (misalnya `ema112_atr`
-  dengan entry EMA50 > EMA112 dan exit trailing stop ATR). Strategi dapat diganti cukup dengan
-  mengubah `STRATEGY_NAME` di sel parameter notebook.
+- Registry strategi Python di `src/strategy_backtest/strategies/` (misalnya `ema112_atr`,
+  `ema50`, `macd`, `atr_filter`, hingga mean reversion `oversold`). Strategi dapat diganti cukup
+  dengan mengubah `STRATEGY_NAME` di sel parameter notebook.
 - `SignalBacktester` menghasilkan metrik QF-Lib, trade log lengkap, visualisasi entry/exit,
   serta distribusi PnL.
 - Analisis trade rugi untuk menemukan pola kelemahan berdasarkan konteks indikator yang dicatat
@@ -107,6 +107,25 @@ dari TradingView (misalnya hasil indikator kustom) dalam bentuk CSV. Fitur yang 
 > **Cara pakai singkat**: buka notebook, set `DATA_FILE`, pilih `STRATEGY_NAME` dan parameter
 > tambahannya, lalu jalankan seluruh sel. Notebook akan menampilkan trade log, grafik harga,
 > equity curve, serta tabel klasifikasi trade rugi dan eksperimen parameter.
+
+### Strategi & Parameter yang Tersedia
+
+Setiap strategi pada registry mendefinisikan metadata entry/exit serta kolom konteks yang otomatis
+ditulis ke trade log `SignalBacktester`. Daftar lengkapnya:
+
+| Nama strategi | Ringkasan aturan | Parameter kunci |
+| ------------- | ---------------- | --------------- |
+| `ema45` | Long ketika penutupan di atas EMA45 hasil optimasi. | `ema_length`, `price_column` |
+| `ema50` | Versi EMA klasik dengan filter 50-bar. | `ema_length`, `price_column` |
+| `ema112` | Tren jangka panjang menggunakan EMA112. | `ema_length`, `price_column` |
+| `macd` | Entry saat garis MACD melintasi ke atas garis sinyal. | `price_column`, `fast_span`, `slow_span`, `signal_span` |
+| `atr_filter` | Long jika harga di atas EMA dan ATR > median rolling. | `price_column`, `ema_span`, `atr_period`, `median_window` |
+| `oversold` | Mean reversion berdasarkan kolom oversold/overbought TradingView. | `entry_column`, `exit_column` |
+| `ema112_atr` | EMA112 dengan stop ATR adaptif dan opsi auto flip. | `ema_length`, `atr_length`, `atr_multiplier`, `reentry_enabled` |
+| `vwap` | VWAP mean reversion + filter RSI serta stop ATR. | `rsi_length`, `rsi_overbought`, `rsi_oversold`, `atr_length`, `atr_stop_multiplier`, `session_frequency` |
+
+Seluruh strategi di atas dapat langsung dipanggil lewat `src/strategy_backtest/registry.get_strategy`
+atau notebook `backtest-strategy.ipynb`, lalu dikombinasikan dengan eksperimen parameter.
 
 ## Data
 Letakkan file CSV historis BTCUSDT harian pada folder `data/` dengan nama `OKX_BTCUSDT, 1D.csv`.
