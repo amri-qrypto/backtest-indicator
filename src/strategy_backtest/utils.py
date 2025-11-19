@@ -84,7 +84,7 @@ def build_long_only_signals(
     """Convert a boolean long condition into entry/exit boolean series."""
 
     condition = long_condition.fillna(False).astype(bool)
-    prev = condition.shift(1).fillna(False)
+    prev = condition.shift(1, fill_value=False)
 
     long_entry = (condition & ~prev).astype(bool)
     long_exit = ((~condition) & prev).astype(bool)

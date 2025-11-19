@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from math import sqrt
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,6 +30,28 @@ def _call_first_available(obj: object, method_names: Iterable[str]) -> float:
     raise AttributeError(f"None of the methods {list(method_names)} exist on {type(obj)!r}")
 
 
+def _infer_time_factors(index: pd.DatetimeIndex) -> Tuple[float, float]:
+    """Infer ``(bars_per_year, years_in_sample)`` from the DatetimeIndex."""
+
+    if len(index) < 2:
+        return 252.0, 1.0
+
+    diffs = index.to_series().diff().dropna().dt.total_seconds()
+    step_seconds = float(diffs.median()) if not diffs.empty else 0.0
+    seconds_in_year = 365.0 * 24.0 * 60.0 * 60.0
+    if step_seconds <= 0.0 or np.isnan(step_seconds):
+        bars_per_year = 252.0
+    else:
+        bars_per_year = seconds_in_year / step_seconds
+
+    elapsed_seconds = (index[-1] - index[0]).total_seconds()
+    years = max(elapsed_seconds / seconds_in_year, len(index) / bars_per_year)
+    if years <= 0.0 or np.isnan(years):
+        years = len(index) / max(bars_per_year, 1.0)
+
+    return bars_per_year, years
+
+
 def _fallback_metrics(returns: pd.Series) -> Dict[str, float]:
     """Compute metrics without QF-Lib as a graceful fallback."""
     returns = returns.astype(float).fillna(0.0)
@@ -37,15 +59,17 @@ def _fallback_metrics(returns: pd.Series) -> Dict[str, float]:
     cumulative = (1.0 + returns).cumprod()
     total_return = cumulative.iloc[-1] - 1.0
 
-    periods = len(returns)
-    annualisation_factor = 252
-    periods_for_cagr = max(periods, 1)
-    cagr = (1.0 + total_return) ** (annualisation_factor / periods_for_cagr) - 1.0
+    index = returns.index if isinstance(returns.index, pd.DatetimeIndex) else None
+    bars_per_year, years = _infer_time_factors(index) if index is not None else (252.0, 1.0)
+    years = max(years, 1e-9)
+    cagr = (1.0 + total_return) ** (1.0 / years) - 1.0
 
     mean_return = returns.mean()
     volatility = returns.std(ddof=0)
-    annualised_vol = volatility * sqrt(annualisation_factor)
-    sharpe_ratio = (mean_return * annualisation_factor / annualised_vol) if annualised_vol > 0 else np.nan
+    annualised_vol = volatility * sqrt(bars_per_year)
+    sharpe_ratio = (
+        (mean_return * bars_per_year) / annualised_vol if annualised_vol > 0 else np.nan
+    )
 
     running_max = cumulative.cummax()
     drawdown = cumulative / running_max - 1.0

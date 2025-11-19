@@ -8,6 +8,11 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
+from .performance.time_utils import (
+    DAYS_PER_YEAR,
+    DEFAULT_BARS_PER_YEAR,
+    resolve_time_factors,
+)
 from .qflib_adapters import to_qfseries
 
 
@@ -74,23 +79,41 @@ def run_backtest(
     return result
 
 
-def performance_metrics(equity: pd.Series) -> Dict[str, float]:
+def performance_metrics(
+    equity: pd.Series,
+    *,
+    bars_per_year: float | None = None,
+) -> Dict[str, float]:
     """Compute performance statistics from an equity curve."""
     if equity.empty:
         raise ValueError("Equity series must not be empty")
 
     equity = equity.astype(float)
     returns = equity.pct_change().fillna(0.0)
+    n_periods = len(equity)
+    index = equity.index if isinstance(equity.index, pd.DatetimeIndex) else None
+    factors = resolve_time_factors(
+        index,
+        bars_per_year_hint=bars_per_year,
+        n_bars=n_periods,
+        default_bars_per_year=DEFAULT_BARS_PER_YEAR,
+    )
 
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
-    periods = len(equity)
-    annual_factor = 252
-    periods_for_return = max(periods - 1, 1)
-    annualized_return = (1.0 + total_return) ** (annual_factor / periods_for_return) - 1.0
-    annualized_volatility = returns.std(ddof=0) * sqrt(annual_factor)
+    mean_return = returns.mean()
+    volatility = returns.std(ddof=0)
+    annualized_volatility = volatility * sqrt(factors.bars_per_year)
+    annualized_return = mean_return * factors.bars_per_year
     sharpe_ratio = (
         annualized_return / annualized_volatility if annualized_volatility > 0 else np.nan
     )
+
+    if np.isfinite(factors.days_between) and factors.days_between > 0:
+        annualized_return_curve = (1.0 + total_return) ** (
+            DAYS_PER_YEAR / factors.days_between
+        ) - 1.0
+    else:
+        annualized_return_curve = np.nan
 
     rolling_max = equity.cummax()
     drawdown = equity / rolling_max - 1.0
@@ -103,7 +126,7 @@ def performance_metrics(equity: pd.Series) -> Dict[str, float]:
 
     return {
         "total_return": float(total_return),
-        "annualized_return": float(annualized_return),
+        "annualized_return": float(annualized_return_curve),
         "annualized_volatility": float(annualized_volatility),
         "sharpe_ratio": float(sharpe_ratio) if np.isfinite(sharpe_ratio) else np.nan,
         "max_drawdown": max_drawdown,

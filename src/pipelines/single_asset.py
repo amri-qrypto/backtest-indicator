@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 from typing import Callable, Dict, Mapping, MutableMapping, Optional, Sequence
 
-import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 import pandas as pd
 
 from ..data_loader import load_ohlcv_csv
@@ -123,8 +124,12 @@ def _plot_equity_curve(results: pd.DataFrame, path: Path) -> None:
     if results.empty:
         raise ValueError("Results frame is empty; cannot plot equity curve")
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    results["equity_curve"].plot(ax=ax, label="Equity Curve")
+    fig = Figure(figsize=(10, 4))
+    FigureCanvasAgg(fig)  # Ensure a non-interactive canvas is attached
+    ax = fig.add_subplot(1, 1, 1)
+
+    equity = results["equity_curve"]
+    ax.plot(equity.index, equity.values, label="Equity Curve")
     ax.set_title("Backtest Equity Curve")
     ax.set_xlabel("Time")
     ax.set_ylabel("Equity (relative)")
@@ -132,7 +137,6 @@ def _plot_equity_curve(results: pd.DataFrame, path: Path) -> None:
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(path)
-    plt.close(fig)
 
 
 __all__ = [

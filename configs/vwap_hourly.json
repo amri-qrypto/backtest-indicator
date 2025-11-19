@@ -1,0 +1,15 @@
+{
+  "data_path": "../data/OKX_ETHUSDT.P, 60.csv",
+  "strategy_name": "vwap",
+  "strategy_kwargs": {
+    "rsi_length": 14,
+    "rsi_overbought": 70,
+    "rsi_oversold": 30,
+    "atr_length": 14,
+    "atr_stop_multiplier": 1.5,
+    "session_frequency": "1D"
+  },
+  "price_column": "close",
+  "output_dir": "outputs/cli_runs",
+  "output_prefix": "vwap_hourly"
+}

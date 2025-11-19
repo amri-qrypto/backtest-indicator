@@ -1,9 +1,28 @@
 """Adapters to convert pandas objects into QF-Lib containers."""
 from __future__ import annotations
 
+import warnings
+
 import pandas as pd
+
+# The warning originates while ``qf_lib`` modules are imported, so the filter
+# must be registered before bringing them in.
+warnings.filterwarnings(
+    "ignore",
+    message="The 'fastpath' keyword in pd.Series is deprecated",
+    category=DeprecationWarning,
+    module=r"qf_lib\.containers\.series\.qf_series",
+)
+
 from qf_lib.containers.dataframe.qf_dataframe import QFDataFrame
 from qf_lib.containers.series.qf_series import QFSeries
+
+warnings.filterwarnings(
+    "ignore",
+    message="The 'fastpath' keyword in pd.Series is deprecated",
+    category=DeprecationWarning,
+    module=r"qf_lib\.containers\.series\.qf_series",
+)
 
 
 def _ensure_datetime_index(obj: pd.Series | pd.DataFrame) -> None:

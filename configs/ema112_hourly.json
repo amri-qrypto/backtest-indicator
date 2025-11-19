@@ -1,0 +1,22 @@
+{
+  "data_path": "../data/OKX_ETHUSDT.P, 60.csv",
+  "strategy_name": "ema112",
+  "strategy_kwargs": {
+    "ema_length": 112,
+    "price_column": "close"
+  },
+  "price_column": "close",
+  "horizon_bars": 4000,
+  "indicators": [
+    {
+      "name": "ema",
+      "source_column": "close",
+      "target_column": "ema_reference",
+      "params": {
+        "span": 112
+      }
+    }
+  ],
+  "output_dir": "outputs/cli_runs",
+  "output_prefix": "ema112_hourly"
+}

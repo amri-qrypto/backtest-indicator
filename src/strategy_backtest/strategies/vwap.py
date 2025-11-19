@@ -9,7 +9,27 @@ import pandas as pd
 from ..base import StrategyBase, StrategyMetadata
 
 
+def _normalize_frequency(freq: str) -> str:
+    """Return a pandas-friendly lowercase frequency string."""
+
+    if not isinstance(freq, str):
+        raise TypeError("Session frequency harus berupa string.")
+
+    normalized = freq.strip().lower()
+    if not normalized:
+        raise ValueError("Session frequency tidak boleh kosong.")
+
+    # Validasi agar pandas dapat mengenali freq tersebut.
+    try:
+        pd.tseries.frequencies.to_offset(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Session frequency '{freq}' tidak valid.") from exc
+
+    return normalized
+
+
 def _session_vwap(df: pd.DataFrame, freq: str) -> pd.Series:
+    freq = _normalize_frequency(freq)
     index = df.index
     high = df["high"].astype(float)
     low = df["low"].astype(float)
@@ -102,20 +122,22 @@ class Strategy(StrategyBase):
         atr_stop_multiplier: float = 1.5,
         session_frequency: str = "1D",
     ) -> None:
+        normalized_frequency = _normalize_frequency(session_frequency)
+
         super().__init__(
             rsi_length=rsi_length,
             rsi_overbought=rsi_overbought,
             rsi_oversold=rsi_oversold,
             atr_length=atr_length,
             atr_stop_multiplier=atr_stop_multiplier,
-            session_frequency=session_frequency,
+            session_frequency=normalized_frequency,
         )
         self.rsi_length = rsi_length
         self.rsi_overbought = rsi_overbought
         self.rsi_oversold = rsi_oversold
         self.atr_length = atr_length
         self.atr_stop_multiplier = atr_stop_multiplier
-        self.session_frequency = session_frequency
+        self.session_frequency = normalized_frequency
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         required_cols = {"open", "high", "low", "close", "volume"}
@@ -124,6 +146,8 @@ class Strategy(StrategyBase):
             raise KeyError(f"DataFrame tidak memiliki kolom harga/volume: {sorted(missing)}")
 
         close = data["close"].astype(float)
+        high = data["high"].astype(float)
+        low = data["low"].astype(float)
         vwap = _session_vwap(data, self.session_frequency)
         rsi = _rsi(close, self.rsi_length)
         atr = _atr(data, self.atr_length)
@@ -158,6 +182,8 @@ class Strategy(StrategyBase):
 
         for ts in index:
             price = float(close.loc[ts])
+            bar_high = float(high.loc[ts])
+            bar_low = float(low.loc[ts])
             atr_value = float(atr.loc[ts]) if pd.notna(atr.loc[ts]) else float("nan")
 
             active_entry_price.loc[ts] = current_entry
@@ -165,11 +191,11 @@ class Strategy(StrategyBase):
             position_context.loc[ts] = position or "flat"
 
             if position == "long":
-                if price <= current_stop:
+                if np.isfinite(current_stop) and bar_low <= current_stop:
                     long_exit.loc[ts] = True
                     position = None
             elif position == "short":
-                if price >= current_stop:
+                if np.isfinite(current_stop) and bar_high >= current_stop:
                     short_exit.loc[ts] = True
                     position = None
 

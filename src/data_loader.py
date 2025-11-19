@@ -4,11 +4,16 @@ from __future__ import annotations
 from typing import Iterable, List, Sequence
 
 import pandas as pd
+from pandas.api import types as pd_types
 
 
 REQUIRED_COLUMNS: List[str] = ["open", "high", "low", "close"]
+COLUMN_ALIASES = {
+    "volume": ["Volume", "VOL", "vol", "Base Volume", "base_volume"],
+}
 EMA_CANDIDATE_COLUMNS: Sequence[str] = ["EMA", "ema", "Ema", "ema_", "ema_close"]
 DEFAULT_ADDITIONAL_COLUMNS: Sequence[str] = [
+    "volume",
     "EMA",
     "Oversold HWO Up",
     "Overbought HWO Down",
@@ -41,11 +46,13 @@ def load_ohlcv_csv(path: str, additional_columns: Iterable[str] | None = None) -
     """
 
     df = pd.read_csv(path)
+    df = _standardize_column_aliases(df)
 
     if "time" not in df.columns:
         raise ValueError("CSV file must contain a 'time' column with UNIX timestamps.")
 
-    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
+    time_col = df["time"]
+    df["time"] = _normalize_time_column(time_col)
     df = df.set_index("time").sort_index()
     df = df[~df.index.duplicated(keep="first")]
 
@@ -70,6 +77,36 @@ def load_ohlcv_csv(path: str, additional_columns: Iterable[str] | None = None) -
     cleaned = df[columns_to_keep].dropna(subset=REQUIRED_COLUMNS)
 
     return cleaned
+
+
+def _standardize_column_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename known column aliases to their canonical names."""
+
+    rename_map = {}
+    for canonical, aliases in COLUMN_ALIASES.items():
+        if canonical in df.columns:
+            continue
+        for alias in aliases:
+            if alias in df.columns:
+                rename_map[alias] = canonical
+                break
+
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    return df
+
+
+def _normalize_time_column(series: pd.Series) -> pd.Series:
+    """Return a timezone-aware datetime column from raw CSV data."""
+
+    if pd_types.is_numeric_dtype(series):
+        return pd.to_datetime(series, unit="s", utc=True)
+
+    numeric_series = pd.to_numeric(series, errors="coerce")
+    if numeric_series.notna().all():
+        return pd.to_datetime(numeric_series, unit="s", utc=True)
+
+    return pd.to_datetime(series, utc=True)
 
 
 __all__ = ["load_ohlcv_csv"]

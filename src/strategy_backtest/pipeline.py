@@ -24,6 +24,10 @@ class TradeRecord:
     exit_reason: str
     entry_context: Dict[str, float] = field(default_factory=dict)
     exit_context: Dict[str, float] = field(default_factory=dict)
+    mae: float = 0.0
+    mfe: float = 0.0
+    long_pnl_pct: float = 0.0
+    short_pnl_pct: float = 0.0
 
 
 @dataclass
@@ -313,6 +317,7 @@ class SignalBacktester:
                         exit_price=price,
                         exit_reason=detailed_exit_reason,
                         entry_price=entry_price,
+                        price_path=self.data.iloc[entry_idx : i + 1][self.price_column],
                         entry_context=entry_context,
                         exit_context=exit_context,
                     )
@@ -350,6 +355,7 @@ class SignalBacktester:
                     exit_price=float(self.data.iloc[-1][self.price_column]),
                     exit_reason="forced_exit_at_end",
                     entry_price=entry_price,
+                    price_path=self.data.iloc[entry_idx:][self.price_column],
                     entry_context=entry_context,
                     exit_context=exit_context,
                 )
@@ -368,6 +374,7 @@ class SignalBacktester:
         exit_price: float,
         exit_reason: str,
         entry_price: float,
+        price_path: pd.Series,
         entry_context: Optional[pd.Series],
         exit_context: Optional[pd.Series],
     ) -> TradeRecord:
@@ -386,6 +393,17 @@ class SignalBacktester:
         entry_ctx = self._context_to_dict(entry_context)
         exit_ctx = self._context_to_dict(exit_context)
 
+        price_path = price_path.astype(float)
+        if direction == "Short":
+            pnl_path = entry_price / price_path - 1.0
+        else:
+            pnl_path = price_path / entry_price - 1.0
+        mae = float(pnl_path.min()) if not pnl_path.empty else 0.0
+        mfe = float(pnl_path.max()) if not pnl_path.empty else 0.0
+
+        long_pnl_pct = float(pnl_pct) if direction == "Long" else 0.0
+        short_pnl_pct = float(pnl_pct) if direction == "Short" else 0.0
+
         return TradeRecord(
             trade_id=trade_id,
             direction=direction,
@@ -399,6 +417,10 @@ class SignalBacktester:
             exit_reason=exit_reason,
             entry_context=entry_ctx,
             exit_context=exit_ctx,
+            mae=mae,
+            mfe=mfe,
+            long_pnl_pct=long_pnl_pct,
+            short_pnl_pct=short_pnl_pct,
         )
 
     def _build_backtest_frame(self, positions: pd.Series) -> pd.DataFrame:
@@ -467,6 +489,10 @@ class SignalBacktester:
                 "pnl_currency": trade.pnl_currency,
                 "bars_held": trade.bars_held,
                 "exit_reason": trade.exit_reason,
+                "mae": trade.mae,
+                "mfe": trade.mfe,
+                "long_pnl_pct": trade.long_pnl_pct,
+                "short_pnl_pct": trade.short_pnl_pct,
             }
             for key, value in trade.entry_context.items():
                 row[f"entry_{key}"] = value

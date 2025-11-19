@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import sys
+import warnings
 from pathlib import Path
 
 # Ensure the ``src`` directory is importable regardless of the working
@@ -11,10 +12,31 @@ from pathlib import Path
 # without requiring manual ``PYTHONPATH`` management.
 PROJECT_ROOT = Path(__file__).resolve().parent
 SRC_PATH = PROJECT_ROOT / "src"
-if SRC_PATH.exists():
-    src_str = str(SRC_PATH)
-    if src_str not in sys.path:
-        sys.path.insert(0, src_str)
+
+# ``import src`` expects the *parent* directory (the project root) to be on
+# ``sys.path``.  Previously we were inserting ``PROJECT_ROOT / "src"`` which
+# makes Python look for ``src/src`` and therefore breaks every notebook / CLI
+# execution unless the working directory already happened to be the root.  By
+# inserting the project root itself (and keeping the ``src`` sub-folder as a
+# fallback) we guarantee deterministic imports regardless of where Python is
+# launched from.
+for candidate in (PROJECT_ROOT, SRC_PATH):
+    if candidate.exists():
+        candidate_str = str(candidate)
+        if candidate_str not in sys.path:
+            sys.path.insert(0, candidate_str)
+
+# ``qf_lib`` 1.x still instantiates ``pd.Series`` with the ``fastpath`` keyword,
+# which pandas has deprecated.  The warning is harmless but extremely noisy
+# because every import of ``qf_lib.containers.series.qf_series`` triggers it.
+# Filtering it here (before any project modules import qf_lib) keeps both the
+# CLI and ``pytest`` output clean without having to touch third-party code.
+warnings.filterwarnings(
+    "ignore",
+    message="The 'fastpath' keyword in pd.Series is deprecated",
+    category=DeprecationWarning,
+    module=r"qf_lib\.containers\.series\.qf_series",
+)
 
 # The "matplotlib_inline" backend bundled with some notebook environments
 # expects ``matplotlib.rcParams`` to expose a private ``_get`` method.  Older
