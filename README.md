@@ -37,8 +37,9 @@ single-asset, sementara pipeline ML dapat dipanggil langsung lewat skrip Python/
   funding, order-book depth, on-chain activity, dan sentiment (setiap sumber punya rule resample,
   kolom pilihan, prefix, serta batas forward-fill).
 - 🧮 **Feature store & normalisasi** – `_engineer_base_features` membangun blok teknikal
-  (return multi-horizon, momentum, volatilitas, volume) kemudian seluruh fitur digabung, di-clip
-  dengan Z-score, di-imputasi, dan dinormalisasi oleh `FeatureStore` berbasis `StandardScaler`.
+  (return multi-horizon, momentum, volatilitas, volume, serta Average Directional Index/ADX
+  lengkap dengan ±DI) kemudian seluruh fitur digabung, di-clip dengan Z-score, di-imputasi, dan
+  dinormalisasi oleh `FeatureStore` berbasis `StandardScaler`.
 - 🎯 **Label builder fleksibel** – `LabelConfig` menentukan horizon (mis. 24 bar), jenis tugas
   (binary/regression), threshold, dan kolom harga untuk membentuk target ML.
 - 🤖 **Model stack + walk-forward CV** – `ModelStackConfig` mengaktifkan Logistic Regression L1 dan
@@ -98,7 +99,7 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
 2. Untuk workflow notebook yang konsisten, jalankan `notebooks/features_target_pipeline.ipynb`
    terlebih dahulu. Notebook ini memanggil utilitas pada `src/features/` untuk:
    - memuat OHLCV via `load_ohlcv_csv`;
-   - membangun fitur teknikal; dan
+   - membangun fitur teknikal (termasuk ADX/±DI untuk mengukur kekuatan tren);
    - menulis dataset hasil (`data/processed/*.parquet` atau `.csv`).
    > Jika `pyarrow` belum terinstal, notebook otomatis jatuh ke CSV. Instal `pyarrow` lewat
    > `pip install -r requirements.txt` agar bisa menyimpan Parquet yang lebih efisien.
@@ -128,7 +129,7 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
 4. **Eksperimen multi-strategi** dengan membuat beberapa file konfigurasi di `configs/` dan
    menjalankan CLI dalam loop/Makefile untuk mengisi `outputs/` dengan hasil yang siap dibandingkan.
    Contoh preset siap pakai:
-   - `configs/ema112_hourly.json` → EMA112 trend-following pada `data/OKX_ETHUSDT.P, 60.csv`.
+   - `configs/ema112_hourly.json` → EMA112 trend-following pada `data/BINANCE_ETHUSDT.P, 60.csv`.
    - `configs/vwap_hourly.json` → Strategi VWAP mean-reversion pada file yang sama.
 
 ### Tahap 3 – Practical Crypto ML Pipeline
@@ -145,19 +146,37 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
 3. **Buat label** memakai `LabelConfig`:
    ```python
    labels = build_labels(ohlcv, LabelConfig(horizon_bars=24, task="binary", threshold=0.0))
+   labels_reg = build_labels(ohlcv, LabelConfig(horizon_bars=24, task="regression"))
    ```
-   Label akan sejajar dengan index fitur setelah `dropna()`.
+   Label akan sejajar dengan index fitur setelah `dropna()`. Gunakan `task="regression"` bila ingin
+   memprediksi forward returns kontinu alih-alih klasifikasi 0/1.
 4. **Normalisasi & simpan metadata fitur** dengan `FeatureStore.fit`, yang memanfaatkan
    `StandardScaler` agar pipeline inference bisa menggunakan scaler yang sama.
 5. **Latih model stack** lewat `train_model_stack`. Secara default pipeline menjalankan Logistic
-   Regression L1 dan Gradient Boosting (`sklearn`) dengan walk-forward CV (`TimeSeriesSplit`).
+   Regression L1 dan Gradient Boosting (`sklearn`) dengan walk-forward CV (`TimeSeriesSplit`). Kamu
+   bisa menyalakan varian linear lain seperti ElasticNet Logistic (grid `C` + `l1_ratio`), Probit
+   (butuh `statsmodels`), atau `SGDClassifier` (loss `log_loss` atau `hinge` dengan grid `alpha`).
    Aktifkan baseline deep learning (MLPClassifier) dengan mengatur
    `ModelStackConfig(train_deep_learning=True, mlp_hidden_layers=(128, 64))` sehingga tiga blok
    model (linear, tree, dan neural network) tersedia sekaligus.
-   - Fungsi `_train_and_score_model` menghasilkan metrik `accuracy` dan `roc_auc` rata-rata.
+   - **Praktik terbaik tuning**:
+     - Pertahankan `TimeSeriesSplit` (walk-forward) agar evaluasi tidak bocor ke masa depan.
+     - Lakukan grid search sederhana untuk regularisasi Logistic Regression (mis. `logistic_l1_cs`
+       atau `logistic_elasticnet_cs` + `logistic_elasticnet_l1_ratios`) dan atur `logistic_tol`
+       serta `logistic_max_iter` agar konvergen.
+     - Aktifkan early stopping pada SGD (`sgd_early_stopping=True`, `sgd_n_iter_no_change=5`) atau
+       batasi `sgd_max_iter` supaya training tidak berlarut.
+     - Untuk MLP, gunakan regularisasi `alpha` dan parameter optimizer `beta_1`/`beta_2` atau
+       `mlp_early_stopping=True` + `mlp_validation_fraction` sebagai alternatif "dropout-like"
+       (validasi hold-out otomatis memotong training bila tidak ada perbaikan).
+   - Untuk `task="binary"`, `_train_and_score_model` mencatat rata-rata `accuracy` dan `roc_auc`.
+   - Untuk `task="regression"`, pipeline otomatis memakai LinearRegression/Ridge/Lasso (serta
+     opsional GradientBoostingRegressor jika `train_tree_based=True`) dan mencatat `mae` + `r2`.
    - Prediksi out-of-fold setiap model disimpan di DataFrame `predictions`.
 6. **Buat sinyal & portofolio**:
-   - `_combine_predictions` mengubah rata-rata probabilitas ke rentang [-1, 1].
+   - `_combine_predictions` mengubah rata-rata probabilitas ke rentang [-1, 1] (tugas klasifikasi)
+     atau mengambil sign prediksi dan mengalikannya dengan quantile absolut (tugas regresi), sehingga
+     sinyal terjaga di kisaran [-1, 1] dan membawa informasi kekuatan.
    - `_build_portfolio` menerjemahkan sinyal menjadi bobot sesuai `PortfolioConfig` (top-K,
      long-short optional, batas leverage & turnover). Guardrail yang terpicu ditandai di
      `guardrail_flags`.
@@ -178,17 +197,37 @@ from src.pipelines.practical_crypto_ml import ModelStackConfig
 
 model_cfg = ModelStackConfig(
     train_linear=True,             # Logistic Regression L1 (baseline reguler)
+    train_logistic_elasticnet=True,# Grid ElasticNet Logistic (variasi C & l1_ratio)
+    train_probit=False,            # Probit (aktif jika statsmodels terpasang)
+    train_sgd=True,                # SGDClassifier (log_loss & hinge) dengan grid alpha
     train_tree_based=True,         # Gradient Boosting / tree-based workhorse
     train_deep_learning=True,      # Aktifkan MLPClassifier (feedforward NN)
     mlp_hidden_layers=(128, 64),   # Atur arsitektur hidden layer
+    mlp_alpha=1e-3,                # Regularisasi L2 untuk menstabilkan MLP
+    mlp_beta1=0.9,                 # Hyperparameter Adam (momentum)
+    mlp_beta2=0.999,               # Hyperparameter Adam (RMS)
+    mlp_validation_fraction=0.1,   # Split hold-out untuk early stopping
+    mlp_early_stopping=True,
     mlp_max_iter=400,              # Iterasi training agar konvergen untuk data 1H
+    logistic_l1_cs=(0.5, 1.0, 2.0),
+    logistic_max_iter=1500,
+    logistic_elasticnet_cs=(0.2, 1.0, 2.0),
+    logistic_elasticnet_l1_ratios=(0.2, 0.5, 0.8),
+    logistic_elasticnet_max_iter=2000,
+    sgd_alphas=(0.0001, 0.001, 0.01),
+    sgd_max_iter=800,
+    sgd_early_stopping=True,
+    sgd_n_iter_no_change=5,
 )
 ```
 
 Pipeline akan menjalankan walk-forward CV (`TimeSeriesSplit`) untuk ketiga model sekaligus, menyimpan
-metrik `accuracy` + `roc_auc` masing-masing di `result.cv_metrics`, dan menggabungkan probabilitas
-menjadi sinyal ensemble. Kamu bisa mematikan salah satu blok (misal hanya linear + tree) dengan
-menyetel flag ke `False`.
+mencatat metrik `accuracy` + `roc_auc` (klasifikasi) atau `mae` + `r2` (regresi) di `result.cv_metrics`
+dengan kunci sesuai nama varian (mis. `logistic_en_C1.0_l1r0.5`, `sgd_hinge_alpha0.001`), dan
+menggabungkan prediksi menjadi sinyal ensemble. Untuk regresi, gunakan `LabelConfig(task="regression")`
+agar stack berisi LinearRegression/Ridge/Lasso (+GradientBoostingRegressor opsional) dan sinyal diubah
+menjadi arah * sign(prediksi) * kekuatan berdasarkan quantile absolut. Kamu bisa mematikan salah satu
+blok (misal hanya linear + tree) dengan menyetel flag ke `False`.
 
 ### Tahap 4 – Analisis & Dokumentasi Hasil
 1. Gunakan notebook `notebooks/strategy_comparison.ipynb` untuk menggabungkan output di
@@ -286,7 +325,7 @@ from src.pipelines.practical_crypto_ml import (
 )
 
 data_cfg = MultiSourceDataConfig(
-    ohlcv_path="data/OKX_ETHUSDT.P, 60.csv",
+    ohlcv_path="data/BINANCE_ETHUSDT.P, 60.csv",
     funding_rates=AuxiliarySourceConfig(path="data/funding_rates.csv", prefix="fund_"),
 )
 result = run_practical_crypto_ml_pipeline(
@@ -315,7 +354,30 @@ print(result.portfolio_weights.tail())
 - **Dataset & fitur** – Notebook `notebooks/ml_baseline.ipynb` memuat dataset hasil `notebooks/features_target_pipeline.ipynb` (ret 1h/4h/24h, momentum 7d, volatilitas 24h/7d, volume z-score, jarak ke EMA 24/96). Target-nya adalah tanda (sign) return 5 jam ke depan sehingga cocok untuk strategi multi-asset intraday.
 - **Model stack** – Dua baseline linear (Lasso & ElasticNet Logistic Regression) dibandingkan dengan `lightgbm.LGBMClassifier` (800 tree, learning rate 0.03, leaves 31). Seluruh model dievaluasi memakai walk-forward `TimeSeriesSplit` sehingga CV dan window out-of-sample (2023) konsisten.
 - **Entry/exit sinyal ML** – Fungsi `fit_and_evaluate` mengubah probabilitas menjadi sinyal kontinu `signal = 2 * prob - 1`. Pada tahap deployment, posisi = `sign(signal)`: nilai >0 membuka long, <0 membuka short, dan 0 berarti flat hingga update jam berikutnya.Profit realisasi dihitung sebagai `position * future_return`, setara memegang posisi selama horizon 5 jam yang sama dengan target label.
-- **Kinerja ringkas** – LightGBM mencatat CV accuracy 0.510/AUC 0.524 dan out-of-sample accuracy 0.542 dengan ROC-AUC 0.548 serta Sharpe sinyal 5.47.Set prediksi yang diekspor (`outputs/predictions/lightgbm_ml_baseline_predictions.csv`) menunjukkan total return +119.7%, Sharpe 6.16, CAGR terannualisasi tinggi (8,173%) karena penggabungan 759 bar 1 jam menjadi satu tahun ekuivalen, serta hit rate 54.1% dengan drawdown terburuk -48.6%.
+- **Kinerja ringkas** – LightGBM mencatat CV accuracy 0.510/AUC 0.524 dan out-of-sample accuracy 0.542 dengan ROC-AUC 0.548 serta Sharpe sinyal 5.47.Set prediksi yang diekspor (`outputs/predictions/lightgbm_ml_baseline_predictions.csv`) menunjukkan total return +119.7%, Sharpe 6.16, CAGR terannualisasi tinggi (8,173%) karena penggabungan 759 bar 1 jam menjadi satu tahun ekuivalen, serta hit rate 54.1% dengan drawdown terburuk -48.6%. Notebook yang sama kini juga menulis baseline baru untuk `ml_logreg` dan `ml_linreg` ke `outputs/predictions/ml_logreg_baseline_predictions.csv` dan `outputs/predictions/ml_linreg_baseline_predictions.csv` agar bisa dipakai ulang oleh notebook perbandingan.
+
+### ML Logistic Regression (`ml_logreg`)
+- **Pipeline** – Memanggil `run_practical_crypto_ml_pipeline` (tugas klasifikasi) dengan konfigurasi linear di `train_model_stack` (Logistic Regression L1/elasticnet). Hasil probabilitas diubah menjadi sinyal [-1, 1] lalu diterjemahkan ke entri/exit `SignalBacktester` dengan guardrail leverage (`max_leverage`) dan turnover (`turnover_limit`).
+- **Konfigurasi penting** – Selaraskan `strategy_kwargs.data_path` dengan `data_path` pipeline agar loader ML dan backtester membaca berkas yang sama. Opsi lain mengikuti `LabelConfig`/`PortfolioConfig`: `label_horizon` (default 24 bar), `top_k`, `long_short=True`, `max_leverage=1.0`, `turnover_limit=1.5`, serta `cv_splits` untuk `TimeSeriesSplit`.
+- **Contoh CLI** – Gunakan preset `configs/ml_logreg_hourly.json` lalu jalankan `python -m src.cli.run_single_asset configs/ml_logreg_hourly.json`. Artefak akan ditulis ke `outputs/ml_logreg/ethusdt_ml_logreg_*` sesuai `output_prefix`.
+- **Notebook** – Di `notebooks/backtest-strategy.ipynb`, set `CONFIG["strategy_name"] = "ml_logreg"` dan isi `CONFIG["strategy_kwargs"]["data_path"]` agar sama dengan path OHLCV. Pipeline notebook akan menyimpan metrik dan trade log sembari memuat konteks `ml_signal`, `ml_probability`, serta flag guardrail pada frame sinyal.
+
+### ML Linear Regression (`ml_linreg`)
+- **Pipeline** – Menjalankan `run_practical_crypto_ml_pipeline` dengan `LabelConfig(task="regression")` sehingga target adalah forward returns kontinu. Stack default mencakup LinearRegression, Ridge, dan Lasso (opsional GradientBoostingRegressor), masing-masing dievaluasi via walk-forward CV dengan metrik `mae`/`r2`.
+- **Interpretasi sinyal** – Ensemble prediksi dikonversi ke [-1, 1] dengan `sign(prediksi) * quantile(|prediksi|)`: sign menentukan arah (long/short), sedangkan quantile absolut menjadi skala kekuatan sehingga sinyal 0.8 berarti konfidensi tinggi untuk long.
+- **Contoh CLI** – Preset regresi single-asset dapat langsung dieksekusi lewat `python -m src.cli.run_single_asset configs/ml_linreg_hourly.json`; artefak disimpan di `outputs/ml_linreg/ethusdt_ml_linreg_*`.
+- **Notebook** – Atur `CONFIG["strategy_name"] = "ml_linreg"` beserta `CONFIG["strategy_kwargs"]["data_path"]` agar notebook memakai berkas OHLCV yang sama. Notebook akan menampilkan `ml_signal` (arah & kekuatan), `predicted_return`, serta flag guardrail.
+
+#### Ringkasan cepat strategi ML & opsi Logistic
+- `ml_logreg` menjalankan Logistic Regression L1 (bisa ditambah ElasticNet/SGD/Probit via `ModelStackConfig`) untuk tugas klasifikasi, mengonversi probabilitas menjadi sinyal [-1, 1].
+- `ml_linreg` menjalankan LinearRegression/Ridge/Lasso (opsional GradientBoostingRegressor) untuk tugas regresi, lalu memetakan prediksi ke arah & kekuatan sinyal.
+- Varian Logistic ElasticNet bisa diaktifkan dengan mengubah `ModelStackConfig(train_logistic_elasticnet=True, logistic_elasticnet_cs=..., logistic_elasticnet_l1_ratios=...)` pada `src/pipelines/practical_crypto_ml.py` atau menambahkan argumen serupa jika memanggil pipeline secara langsung.
+
+| Strategi | Horizon label default | Penalti reguler / model utama | Metode konversi sinyal | File konfigurasi yang diedit |
+| --- | --- | --- | --- | --- |
+| `ml_logreg` | 24 bar (LabelConfig) | Logistic Regression L1; opsi ElasticNet/SGD/Probit via `ModelStackConfig` | Probabilitas → `2 * p - 1`, lalu `sign` jadi posisi | `configs/ml_logreg_hourly.json` (CLI) atau `notebooks/backtest-strategy.ipynb` (`CONFIG` blok ML) |
+| `ml_linreg` | 24 bar (LabelConfig, tugas regresi) | LinearRegression/Ridge/Lasso (opsional GradientBoostingRegressor) | `sign(prediksi) * quantile(|prediksi|)` untuk arah + kekuatan | `configs/ml_linreg_hourly.json` (CLI) atau `notebooks/backtest-strategy.ipynb` (`CONFIG` blok ML) |
+| Logistic ElasticNet varian | 24 bar (tugas klasifikasi) | Logistic Regression ElasticNet (`saga`) dengan grid `logistic_elasticnet_cs` & `logistic_elasticnet_l1_ratios` | Probabilitas → sinyal [-1, 1] sama seperti `ml_logreg` | `src/pipelines/practical_crypto_ml.py` → `ModelStackConfig(train_logistic_elasticnet=True, ...)` atau override saat memanggil `run_practical_crypto_ml_pipeline` |
 
 ## Hasil Evaluasi & Pemilihan Strategi Sesuai Kondisi Pasar
 
@@ -333,9 +395,9 @@ print(result.portfolio_weights.tail())
 ## Notebook Referensi
 
 - **`notebooks/features_target_pipeline.ipynb`** – Loader OHLCV → rekayasa fitur teknikal → label builder. Notebook ini memanggil utilitas `src/features` untuk menghitung return multi-horizon, momentum, volatilitas, volume anomaly dan menyimpan dataset ke `data/processed/*.csv` untuk dipakai ulang oleh pipeline ML.
-- **`notebooks/ml_baseline.ipynb`** – Menyusun baseline ML lengkap: pembagian walk-forward, normalisasi (`StandardScaler`), regresi logistik L1 (Lasso) & ElasticNet, plus LightGBM. Notebook ini juga mengekspor model `.pkl`, prediksi, serta laporan Excel sehingga eksperimen bisa dilacak lintas commit.
+- **`notebooks/ml_baseline.ipynb`** – Menyusun baseline ML lengkap: pembagian walk-forward, normalisasi (`StandardScaler`), regresi logistik L1 (Lasso) & ElasticNet, plus LightGBM. Notebook ini juga mengekspor model `.pkl`, prediksi (LightGBM + baseline `ml_logreg` & `ml_linreg`), serta laporan Excel sehingga eksperimen bisa dilacak lintas commit sekaligus siap dibaca oleh dashboard perbandingan.
 - **`notebooks/backtest-strategy.ipynb`** – Front-end minimalis untuk memanggil `run_single_asset_pipeline`. Setelah konfigurasi `CONFIG`, notebook ini otomatis mencetak Sharpe, CAGR, serta trade log dan menyediakan sel tambahan untuk analisis MAE/MFE guna memahami distribusi PnL strategi yang sedang diuji.
-- **`notebooks/strategy_comparison.ipynb`** – Membaca output CLI/notebook (EMA112, VWAP, ML) lalu menyusun ranking metrik, cuplikan trade, distribusi PnL, hingga ekspor Excel multi-sheet (`comparison_metrics`, `trade_summary`, `ml_lightgbm_predictions`). Notebook ini menjadi dashboard final untuk memutuskan strategi apa yang dipakai live.
+- **`notebooks/strategy_comparison.ipynb`** – Membaca output CLI/notebook (EMA112, VWAP, ML) lalu menyusun ranking metrik, cuplikan trade, distribusi PnL, hingga ekspor Excel multi-sheet (`comparison_metrics`, `trade_summary`, dan prediksi ML dari `ml_lightgbm`/`ml_logreg`/`ml_linreg`). Notebook ini menjadi dashboard final untuk memutuskan strategi apa yang dipakai live.
 
 ## Glosarium Teknis
 

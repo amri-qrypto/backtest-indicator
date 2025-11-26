@@ -1,15 +1,27 @@
 """End-to-end pipeline for a practical crypto trading ML stack."""
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.linear_model import (
+    Lasso,
+    LinearRegression,
+    LogisticRegression,
+    Ridge,
+    SGDClassifier,
+)
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    mean_absolute_error,
+    r2_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 
@@ -61,13 +73,34 @@ class ModelStackConfig:
     """Toggle which models are trained and how CV is performed."""
 
     train_linear: bool = True
+    train_logistic_elasticnet: bool = False
+    train_probit: bool = False
+    train_sgd: bool = False
     train_tree_based: bool = True
     train_deep_learning: bool = False
     cv_splits: int = 5
     random_state: int = 7
+    logistic_l1_cs: Sequence[float] = (0.5, 1.0, 2.0)
+    logistic_max_iter: int = 1200
+    logistic_tol: float = 1e-4
+    logistic_elasticnet_cs: Sequence[float] = (0.2, 1.0)
+    logistic_elasticnet_l1_ratios: Sequence[float] = (0.2, 0.5, 0.8)
+    logistic_elasticnet_max_iter: int = 2000
+    sgd_losses: Sequence[str] = ("log_loss", "hinge")
+    sgd_alphas: Sequence[float] = (0.0001, 0.001)
+    sgd_max_iter: int = 1000
+    sgd_early_stopping: bool = True
+    sgd_n_iter_no_change: int = 5
+    sgd_validation_fraction: float = 0.1
+    sgd_tol: float = 1e-3
     mlp_hidden_layers: Sequence[int] = (128, 64)
     mlp_activation: str = "relu"
     mlp_max_iter: int = 300
+    mlp_alpha: float = 1e-4
+    mlp_beta1: float = 0.9
+    mlp_beta2: float = 0.999
+    mlp_validation_fraction: float = 0.1
+    mlp_early_stopping: bool = True
 
 
 @dataclass(frozen=True)
@@ -245,9 +278,12 @@ def _train_and_score_model(
     features: pd.DataFrame,
     labels: pd.Series,
     cv: TimeSeriesSplit,
+    task: str,
 ) -> Tuple[object, Mapping[str, float], pd.Series]:
     cv_accuracy: List[float] = []
     cv_auc: List[float] = []
+    cv_mae: List[float] = []
+    cv_r2: List[float] = []
     oof_pred = pd.Series(index=features.index, dtype=float, name=model_name)
 
     for train_idx, test_idx in cv.split(features):
@@ -255,20 +291,37 @@ def _train_and_score_model(
         y_train, y_test = labels.iloc[train_idx], labels.iloc[test_idx]
 
         model.fit(X_train, y_train)
-        probs = _predict_proba(model, X_test)
-        oof_pred.iloc[test_idx] = probs
+        if task == "binary":
+            probs = _predict_proba(model, X_test)
+            oof_pred.iloc[test_idx] = probs
 
-        cv_accuracy.append(accuracy_score(y_test, (probs > 0.5).astype(int)))
-        try:
-            auc = roc_auc_score(y_test, probs)
-            cv_auc.append(auc)
-        except ValueError:
-            cv_auc.append(np.nan)
+            cv_accuracy.append(accuracy_score(y_test, (probs > 0.5).astype(int)))
+            try:
+                auc = roc_auc_score(y_test, probs)
+                cv_auc.append(auc)
+            except ValueError:
+                cv_auc.append(np.nan)
+        elif task == "regression":
+            preds = model.predict(X_test)
+            oof_pred.iloc[test_idx] = preds
+            cv_mae.append(mean_absolute_error(y_test, preds))
+            try:
+                cv_r2.append(r2_score(y_test, preds))
+            except ValueError:
+                cv_r2.append(np.nan)
+        else:  # pragma: no cover - defensive branch
+            raise ValueError(f"Unsupported task '{task}' for model scoring")
 
-    metrics = {
-        "accuracy": float(np.nanmean(cv_accuracy)),
-        "roc_auc": float(np.nanmean(cv_auc)),
-    }
+    if task == "binary":
+        metrics = {
+            "accuracy": float(np.nanmean(cv_accuracy)),
+            "roc_auc": float(np.nanmean(cv_auc)),
+        }
+    else:
+        metrics = {
+            "mae": float(np.nanmean(cv_mae)),
+            "r2": float(np.nanmean(cv_r2)),
+        }
     model.fit(features, labels)
     return model, metrics, oof_pred
 
@@ -283,10 +336,30 @@ def _predict_proba(model, features: pd.DataFrame) -> np.ndarray:
     return preds.astype(float)
 
 
+class StatsmodelsProbitClassifier:
+    """Light wrapper to make statsmodels Probit mimic scikit-learn API."""
+
+    def fit(self, features: pd.DataFrame, labels: pd.Series):
+        import statsmodels.api as sm
+
+        features_const = sm.add_constant(features, has_constant="add")
+        self._model = sm.Probit(labels, features_const)
+        self._result = self._model.fit(disp=0)
+        return self
+
+    def predict(self, features: pd.DataFrame) -> np.ndarray:
+        import statsmodels.api as sm
+
+        features_const = sm.add_constant(features, has_constant="add")
+        return self._result.predict(features_const)
+
+
 def train_model_stack(
     features: pd.DataFrame,
     labels: pd.Series,
     config: ModelStackConfig,
+    *,
+    task: str = "binary",
 ) -> Tuple[Dict[str, object], Dict[str, Mapping[str, float]], pd.DataFrame]:
     models: Dict[str, object] = {}
     cv_metrics: Dict[str, Mapping[str, float]] = {}
@@ -294,45 +367,146 @@ def train_model_stack(
 
     cv = TimeSeriesSplit(n_splits=config.cv_splits)
 
-    if config.train_linear:
-        linear_model = LogisticRegression(
-            penalty="l1",
-            solver="liblinear",
-            max_iter=1000,
-            random_state=config.random_state,
+    non_null_labels = labels.dropna()
+    unique_values = pd.unique(non_null_labels)
+    is_binary_label = len(unique_values) <= 2 and np.isin(unique_values, [0, 1]).all()
+    if task == "binary" and not is_binary_label:
+        raise ValueError("LabelConfig.task='binary' tetapi label bersifat kontinu. Gunakan 'regression'.")
+    if task == "regression" and len(unique_values) <= 2:
+        raise ValueError(
+            "LabelConfig.task='regression' tetapi label hanya berisi dua nilai unik. Gunakan 'binary'."
         )
-        model, metrics, preds = _train_and_score_model(
-            "logistic_l1", linear_model, features, labels, cv
-        )
-        models["logistic_l1"] = model
-        cv_metrics["logistic_l1"] = metrics
-        predictions["logistic_l1"] = preds
 
-    if config.train_tree_based:
-        gbdt = GradientBoostingClassifier(random_state=config.random_state)
-        model, metrics, preds = _train_and_score_model(
-            "gbdt", gbdt, features, labels, cv
-        )
-        models["gbdt"] = model
-        cv_metrics["gbdt"] = metrics
-        predictions["gbdt"] = preds
+    if task == "binary":
+        if config.train_linear:
+            for c in config.logistic_l1_cs:
+                name = f"logistic_l1_C{c}"
+                linear_model = LogisticRegression(
+                    penalty="l1",
+                    solver="liblinear",
+                    C=c,
+                    tol=config.logistic_tol,
+                    max_iter=config.logistic_max_iter,
+                    random_state=config.random_state,
+                )
+                model, metrics, preds = _train_and_score_model(
+                    name, linear_model, features, labels, cv, task
+                )
+                models[name] = model
+                cv_metrics[name] = metrics
+                predictions[name] = preds
 
-    if config.train_deep_learning:
-        hidden_layers = tuple(int(layer) for layer in config.mlp_hidden_layers)
-        mlp = MLPClassifier(
-            hidden_layer_sizes=hidden_layers,
-            activation=config.mlp_activation,
-            solver="adam",
-            learning_rate_init=0.001,
-            max_iter=config.mlp_max_iter,
-            random_state=config.random_state,
-        )
-        model, metrics, preds = _train_and_score_model(
-            "mlp", mlp, features, labels, cv
-        )
-        models["mlp"] = model
-        cv_metrics["mlp"] = metrics
-        predictions["mlp"] = preds
+        if config.train_logistic_elasticnet:
+            for c in config.logistic_elasticnet_cs:
+                for l1_ratio in config.logistic_elasticnet_l1_ratios:
+                    name = f"logistic_en_C{c}_l1r{l1_ratio}"
+                    elastic = LogisticRegression(
+                        penalty="elasticnet",
+                        solver="saga",
+                        l1_ratio=l1_ratio,
+                        C=c,
+                        tol=config.logistic_tol,
+                        max_iter=config.logistic_elasticnet_max_iter,
+                        random_state=config.random_state,
+                    )
+                    model, metrics, preds = _train_and_score_model(
+                        name, elastic, features, labels, cv, task
+                    )
+                    models[name] = model
+                    cv_metrics[name] = metrics
+                    predictions[name] = preds
+
+        if config.train_probit:
+            if importlib.util.find_spec("statsmodels") is None:
+                raise ImportError(
+                    "statsmodels tidak tersedia. Install untuk mengaktifkan model Probit."
+                )
+
+            probit = StatsmodelsProbitClassifier()
+            model, metrics, preds = _train_and_score_model(
+                "probit", probit, features, labels, cv, task
+            )
+            models["probit"] = model
+            cv_metrics["probit"] = metrics
+            predictions["probit"] = preds
+
+        if config.train_sgd:
+            for loss in config.sgd_losses:
+                for alpha in config.sgd_alphas:
+                    name = f"sgd_{loss}_alpha{alpha}"
+                    sgd = SGDClassifier(
+                        loss=loss,
+                        penalty="elasticnet" if loss == "log_loss" else "l2",
+                        alpha=alpha,
+                        max_iter=config.sgd_max_iter,
+                        tol=config.sgd_tol,
+                        early_stopping=config.sgd_early_stopping,
+                        n_iter_no_change=config.sgd_n_iter_no_change,
+                        validation_fraction=config.sgd_validation_fraction,
+                        random_state=config.random_state,
+                    )
+                    model, metrics, preds = _train_and_score_model(
+                        name, sgd, features, labels, cv, task
+                    )
+                    models[name] = model
+                    cv_metrics[name] = metrics
+                    predictions[name] = preds
+
+        if config.train_tree_based:
+            gbdt = GradientBoostingClassifier(random_state=config.random_state)
+            model, metrics, preds = _train_and_score_model(
+                "gbdt", gbdt, features, labels, cv, task
+            )
+            models["gbdt"] = model
+            cv_metrics["gbdt"] = metrics
+            predictions["gbdt"] = preds
+
+        if config.train_deep_learning:
+            hidden_layers = tuple(int(layer) for layer in config.mlp_hidden_layers)
+            mlp = MLPClassifier(
+                hidden_layer_sizes=hidden_layers,
+                activation=config.mlp_activation,
+                solver="adam",
+                learning_rate_init=0.001,
+                alpha=config.mlp_alpha,
+                beta_1=config.mlp_beta1,
+                beta_2=config.mlp_beta2,
+                validation_fraction=config.mlp_validation_fraction,
+                early_stopping=config.mlp_early_stopping,
+                max_iter=config.mlp_max_iter,
+                random_state=config.random_state,
+            )
+            model, metrics, preds = _train_and_score_model(
+                "mlp", mlp, features, labels, cv, task
+            )
+            models["mlp"] = model
+            cv_metrics["mlp"] = metrics
+            predictions["mlp"] = preds
+    elif task == "regression":
+        if config.train_linear:
+            linear_variants = {
+                "linreg": LinearRegression(),
+                "ridge": Ridge(random_state=config.random_state),
+                "lasso": Lasso(random_state=config.random_state),
+            }
+            for name, model_instance in linear_variants.items():
+                model, metrics, preds = _train_and_score_model(
+                    name, model_instance, features, labels, cv, task
+                )
+                models[name] = model
+                cv_metrics[name] = metrics
+                predictions[name] = preds
+
+        if config.train_tree_based:
+            gbdt_reg = GradientBoostingRegressor(random_state=config.random_state)
+            model, metrics, preds = _train_and_score_model(
+                "gbdt_reg", gbdt_reg, features, labels, cv, task
+            )
+            models["gbdt_reg"] = model
+            cv_metrics["gbdt_reg"] = metrics
+            predictions["gbdt_reg"] = preds
+    else:  # pragma: no cover - defensive branch
+        raise ValueError(f"Unsupported task '{task}'")
 
     if predictions.empty:
         raise ValueError("Model stack is empty. Enable at least one model type")
@@ -344,9 +518,17 @@ def train_model_stack(
 # Signal generation and portfolio construction
 
 
-def _combine_predictions(predictions: pd.DataFrame) -> pd.Series:
+def _combine_predictions(predictions: pd.DataFrame, task: str) -> pd.Series:
     ensemble = predictions.mean(axis=1)
-    return 2 * ensemble - 1  # map probability to [-1, 1]
+    if task == "binary":
+        return 2 * ensemble - 1  # map probability to [-1, 1]
+
+    if predictions.empty:
+        return pd.Series(dtype=float)
+
+    # Direction diambil dari sign prediksi, magnitude memakai peringkat absolut (quantile)
+    strength = ensemble.abs().rank(pct=True)
+    return np.sign(ensemble) * strength.clip(0.0, 1.0)
 
 
 def _build_portfolio(
@@ -442,9 +624,9 @@ def run_practical_crypto_ml_pipeline(
 
     feature_store, normalized = FeatureStore.fit(merged_features)
     models, cv_metrics, oof_predictions = train_model_stack(
-        normalized, labels, model_cfg
+        normalized, labels, model_cfg, task=label_cfg.task
     )
-    signals = _combine_predictions(oof_predictions)
+    signals = _combine_predictions(oof_predictions, label_cfg.task)
     portfolio_weights, guardrails = _build_portfolio(signals, portfolio_cfg)
     realized_performance = _evaluate_realized_performance(
         signals, labels, label_cfg.horizon_bars, label_cfg.task

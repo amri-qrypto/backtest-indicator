@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 
 PRICE_COL = "close"
+HIGH_COL = "high"
+LOW_COL = "low"
 VOLUME_COL = "volume"
 
 
@@ -62,6 +64,51 @@ def _volume_change(volumes: pd.Series, windows: Sequence[int]) -> Mapping[str, p
     return features
 
 
+def _average_directional_index(
+    high: pd.Series, low: pd.Series, close: pd.Series, window: int
+) -> Mapping[str, pd.Series]:
+    if window <= 1:
+        raise ValueError("ADX window must be greater than 1.")
+
+    high_diff = high.diff()
+    low_diff = low.shift(1) - low
+
+    plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
+    minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
+
+    tr_components = pd.concat(
+        [
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs(),
+        ],
+        axis=1,
+    )
+    true_range = tr_components.max(axis=1)
+
+    alpha = 1 / window
+    smoothed_tr = true_range.ewm(alpha=alpha, adjust=False).mean()
+    smoothed_plus_dm = pd.Series(plus_dm, index=high.index).ewm(
+        alpha=alpha, adjust=False
+    ).mean()
+    smoothed_minus_dm = pd.Series(minus_dm, index=high.index).ewm(
+        alpha=alpha, adjust=False
+    ).mean()
+
+    plus_di = (smoothed_plus_dm / smoothed_tr) * 100
+    minus_di = (smoothed_minus_dm / smoothed_tr) * 100
+
+    denominator = (plus_di + minus_di).replace(0, np.nan)
+    dx = ((plus_di - minus_di).abs() / denominator) * 100
+    adx = dx.ewm(alpha=alpha, adjust=False).mean()
+
+    return {
+        f"plus_di_{window}": plus_di.rename(f"plus_di_{window}"),
+        f"minus_di_{window}": minus_di.rename(f"minus_di_{window}"),
+        f"adx_{window}": adx.rename(f"adx_{window}"),
+    }
+
+
 def build_technical_features(
     df: pd.DataFrame,
     *,
@@ -69,12 +116,15 @@ def build_technical_features(
     momentum_windows: Sequence[int] = (6, 12, 24, 48),
     volatility_windows: Sequence[int] = (6, 24, 72),
     volume_windows: Sequence[int] = (6, 24),
+    adx_window: int = 14,
 ) -> pd.DataFrame:
     """Generate a consolidated ``DataFrame`` containing engineered technical factors."""
 
-    _require_columns(df, [PRICE_COL, VOLUME_COL])
+    _require_columns(df, [PRICE_COL, HIGH_COL, LOW_COL, VOLUME_COL])
 
     prices = df[PRICE_COL]
+    high = df[HIGH_COL]
+    low = df[LOW_COL]
     volumes = df[VOLUME_COL]
 
     feature_blocks: list[pd.Series] = []
@@ -83,6 +133,7 @@ def build_technical_features(
         _rolling_momentum(prices, momentum_windows),
         _rolling_volatility(prices, volatility_windows),
         _volume_change(volumes, volume_windows),
+        _average_directional_index(high, low, prices, adx_window),
     ):
         feature_blocks.extend(block.values())
 

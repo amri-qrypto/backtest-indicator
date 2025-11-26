@@ -1,0 +1,17 @@
+{
+  "data_path": "../data/BINANCE_ETHUSDT.P, 60.csv",
+  "strategy_name": "ml_linreg",
+  "strategy_kwargs": {
+    "data_path": "../data/BINANCE_ETHUSDT.P, 60.csv",
+    "label_horizon": 24,
+    "long_short": true,
+    "max_leverage": 1.0,
+    "turnover_limit": 1.5,
+    "cv_splits": 4,
+    "train_tree_based": false
+  },
+  "price_column": "close",
+  "horizon_bars": 4000,
+  "output_dir": "outputs/ml_linreg",
+  "output_prefix": "ethusdt_ml_linreg"
+}

@@ -15,6 +15,8 @@ _STRATEGY_MODULES = {
     "macd": "src.strategy_macd",
     "oversold": "src.strategy_oversold",
     "vwap": "src.strategy_backtest.strategies.vwap",
+    "ml_logreg": "src.strategy_backtest.strategies.ml_logreg",
+    "ml_linreg": "src.strategy_backtest.strategies.ml_linreg",
 }
 
 _CACHE: Dict[str, Type[StrategyBase]] = {}

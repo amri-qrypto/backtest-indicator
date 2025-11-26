@@ -10,7 +10,7 @@ import pandas as pd
 from src.data_loader import load_ohlcv_csv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_ETHBTC_1H_PATH = PROJECT_ROOT / "data" / "OKX_ETHUSDT.P, 60.csv"
+DEFAULT_ETHBTC_1H_PATH = PROJECT_ROOT / "data" / "BINANCE_ETHUSDT.P, 60.csv"
 
 
 def load_ethbtc_1h(path: str | Path | None = None, *, additional_columns: Iterable[str] | None = None) -> pd.DataFrame:
@@ -70,12 +70,18 @@ def make_forward_return_sign(
     forward_return = make_forward_return(
         df, horizon=horizon, price_column=price_column, return_type="simple"
     )
+    missing_mask = forward_return.isna()
     name = f"target_sign_return_{horizon}h"
     if binary:
-        target = (forward_return >= 0.0).astype(int).rename(name)
+        target = (forward_return >= 0.0).astype("Int64").rename(name)
     else:
-        target = np.sign(forward_return).astype(int).rename(name)
-    return target
+        target = (
+            pd.Series(np.sign(forward_return), index=forward_return.index)
+            .astype("Int64")
+            .rename(name)
+        )
+
+    return target.mask(missing_mask)
 
 
 __all__ = [
