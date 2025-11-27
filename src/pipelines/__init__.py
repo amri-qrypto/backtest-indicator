@@ -20,6 +20,7 @@ from .ml_signals import (
     MLSignalBacktestResult,
     MLSignalInferenceConfig,
     MLSignalWeightingConfig,
+    save_ml_backtest_outputs,
     run_ml_signal_backtest,
 )
 
@@ -39,5 +40,6 @@ __all__ = [
     "MLSignalInferenceConfig",
     "MLSignalWeightingConfig",
     "MLSignalBacktestResult",
+    "save_ml_backtest_outputs",
     "run_ml_signal_backtest",
 ]

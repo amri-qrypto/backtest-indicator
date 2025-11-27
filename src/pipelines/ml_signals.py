@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence
+from typing import Dict, Mapping, MutableMapping, Optional, Sequence
 
 import joblib
 import numpy as np
@@ -13,6 +14,7 @@ import pandas as pd
 from ..backtest import performance_metrics, run_backtest
 from ..performance.time_utils import DEFAULT_BARS_PER_YEAR
 from ..trade_analysis import generate_trade_log, summarise_trades
+from ..utils.metrics import portfolio_metrics_from_returns
 from .practical_crypto_ml import FeatureStore
 
 
@@ -58,6 +60,7 @@ class MLSignalBacktestResult:
     positions: pd.Series
     backtest: pd.DataFrame
     metrics: Mapping[str, float]
+    standard_metrics: Mapping[str, float]
     trade_log: pd.DataFrame
     trade_summary: Mapping[str, float]
     monitoring_artifacts: Mapping[str, pd.DataFrame]
@@ -202,6 +205,9 @@ def run_ml_signal_backtest(
     metrics = performance_metrics(
         backtest["equity_curve"], bars_per_year=DEFAULT_BARS_PER_YEAR
     )
+    standard_metrics = portfolio_metrics_from_returns(
+        backtest["strategy_ret"], bars_per_year=DEFAULT_BARS_PER_YEAR
+    )
     trade_log = generate_trade_log(backtest, initial_capital=model_config.initial_capital)
     trade_summary = asdict(summarise_trades(trade_log))
 
@@ -223,10 +229,34 @@ def run_ml_signal_backtest(
         positions=positions,
         backtest=backtest,
         metrics=metrics,
+        standard_metrics=standard_metrics,
         trade_log=trade_log,
         trade_summary=trade_summary,
         monitoring_artifacts=monitoring,
     )
+
+
+def save_ml_backtest_outputs(
+    result: MLSignalBacktestResult, output_dir: str | Path, prefix: str = "ml_backtest"
+) -> Dict[str, Path]:
+    """Persist ML backtest metrics and trade log to disk."""
+
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+
+    payload: MutableMapping[str, object] = {
+        "metrics": result.metrics,
+        "standard_metrics": result.standard_metrics,
+        "trade_summary": result.trade_summary,
+    }
+
+    metrics_path = destination / f"{prefix}_metrics.json"
+    metrics_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+    trades_path = destination / f"{prefix}_trades.csv"
+    result.trade_log.to_csv(trades_path, index=False)
+
+    return {"metrics": metrics_path, "trades": trades_path}
 
 
 __all__ = [
@@ -234,4 +264,5 @@ __all__ = [
     "MLSignalWeightingConfig",
     "MLSignalBacktestResult",
     "run_ml_signal_backtest",
+    "save_ml_backtest_outputs",
 ]

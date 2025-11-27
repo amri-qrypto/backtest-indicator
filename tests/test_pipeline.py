@@ -43,6 +43,8 @@ def test_pipeline_runs_on_mini_dataset(tmp_path):
     assert not outputs.trades["pnl_pct"].isna().any()
 
     artifacts = save_backtest_outputs(outputs, tmp_path, prefix="mini")
+    metrics = (tmp_path / "mini_metrics.json").read_text()
     assert (tmp_path / "mini_metrics.json") == artifacts["metrics"]
     assert (tmp_path / "mini_trades.csv").exists()
     assert (tmp_path / "mini_equity.png").exists()
+    assert "standard_metrics" in metrics

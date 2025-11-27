@@ -14,6 +14,7 @@ from ..data_loader import load_ohlcv_csv
 from ..indicators import calculate_ema
 from ..strategy_backtest.pipeline import BacktestOutputs, SignalBacktester
 from ..strategy_backtest.registry import get_strategy
+from ..utils.metrics import portfolio_metrics_from_returns
 
 IndicatorFunction = Callable[..., pd.Series]
 
@@ -100,9 +101,13 @@ def save_backtest_outputs(
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
 
+    standard_metrics = portfolio_metrics_from_returns(
+        outputs.results["strategy_return"],
+    )
     metrics_payload: MutableMapping[str, object] = {
         "metrics": outputs.metrics,
         "trade_summary": outputs.trade_summary,
+        "standard_metrics": standard_metrics,
     }
     metrics_path = destination / f"{prefix}_metrics.json"
     metrics_path.write_text(json.dumps(metrics_payload, indent=2, sort_keys=True))
