@@ -45,6 +45,18 @@ class AuxiliarySourceConfig:
 
 
 @dataclass(frozen=True)
+class FeatureEngineeringConfig:
+    """Control which optional features are engineered from available sources."""
+
+    realized_vol_window: Optional[int] = None
+    funding_skew_window: Optional[int] = None
+    funding_skew_column: Optional[str] = None
+    order_book_imbalance_window: Optional[int] = None
+    order_book_bid_column: str = "bid_volume"
+    order_book_ask_column: str = "ask_volume"
+
+
+@dataclass(frozen=True)
 class MultiSourceDataConfig:
     """Bundle the required data sources for the ML pipeline."""
 
@@ -56,6 +68,9 @@ class MultiSourceDataConfig:
     resample_rule: str = "1H"
     fill_limit: int = 3
     clip_zscore: float = 5.0
+    feature_engineering: FeatureEngineeringConfig = field(
+        default_factory=FeatureEngineeringConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,8 @@ class LabelConfig:
     task: str = "binary"  # binary | regression
     threshold: float = 0.0
     price_column: str = "close"
+    rolling_vol_window: Optional[int] = None
+    rolling_vol_multiplier: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -203,10 +220,15 @@ def _clip_outliers_zscore(df: pd.DataFrame, zscore: float) -> pd.DataFrame:
     return clipped
 
 
-def _engineer_base_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
+def _engineer_base_features(
+    ohlcv: pd.DataFrame,
+    feature_cfg: FeatureEngineeringConfig,
+    auxiliary_sources: Optional[Mapping[str, pd.DataFrame]] = None,
+) -> pd.DataFrame:
     features = pd.DataFrame(index=ohlcv.index)
     close = ohlcv["close"].astype(float)
     volume = ohlcv.get("volume", pd.Series(index=ohlcv.index, data=np.nan)).astype(float)
+    auxiliary_sources = auxiliary_sources or {}
 
     returns_1h = close.pct_change(1)
     returns_4h = close.pct_change(4)
@@ -223,27 +245,68 @@ def _engineer_base_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
     features["price_distance_ema_24"] = close / close.ewm(span=24, adjust=False).mean() - 1
     features["price_distance_ema_96"] = close / close.ewm(span=96, adjust=False).mean() - 1
 
+    if feature_cfg.realized_vol_window and feature_cfg.realized_vol_window > 0:
+        high = ohlcv.get("high", pd.Series(index=ohlcv.index, data=np.nan)).astype(float)
+        low = ohlcv.get("low", pd.Series(index=ohlcv.index, data=np.nan)).astype(float)
+        intrabar_range = np.log(high / low).replace([np.inf, -np.inf], np.nan)
+        features["realized_vol_intrabar"] = intrabar_range.rolling(
+            feature_cfg.realized_vol_window
+        ).std()
+
+    funding = auxiliary_sources.get("funding")
+    if (
+        feature_cfg.funding_skew_window
+        and feature_cfg.funding_skew_window > 0
+        and funding is not None
+        and not funding.empty
+    ):
+        if feature_cfg.funding_skew_column and feature_cfg.funding_skew_column in funding.columns:
+            funding_series = funding[feature_cfg.funding_skew_column]
+        else:
+            funding_series = funding.mean(axis=1)
+        features["funding_skew"] = funding_series
+        features[f"funding_skew_roll_{feature_cfg.funding_skew_window}"] = funding_series.rolling(
+            feature_cfg.funding_skew_window
+        ).mean()
+
+    order_book = auxiliary_sources.get("order_book")
+    if (
+        feature_cfg.order_book_imbalance_window
+        and feature_cfg.order_book_imbalance_window > 0
+        and order_book is not None
+        and not order_book.empty
+    ):
+        bid_volume = order_book.get(feature_cfg.order_book_bid_column)
+        ask_volume = order_book.get(feature_cfg.order_book_ask_column)
+        if bid_volume is not None and ask_volume is not None:
+            imbalance = (bid_volume - ask_volume) / (bid_volume + ask_volume).replace(0, np.nan)
+            features["order_book_imbalance"] = imbalance
+            features[
+                f"order_book_imbalance_roll_{feature_cfg.order_book_imbalance_window}"
+            ] = imbalance.rolling(feature_cfg.order_book_imbalance_window).mean()
+
     return features
 
 
 def _merge_sources(
     ohlcv: pd.DataFrame, data_cfg: MultiSourceDataConfig
 ) -> pd.DataFrame:
-    base_features = _engineer_base_features(ohlcv)
-
     funding = _load_auxiliary_source(data_cfg.funding_rates, ohlcv.index)
+    order_book = _load_auxiliary_source(data_cfg.order_book_depth, ohlcv.index)
+    on_chain = _load_auxiliary_source(data_cfg.on_chain_activity, ohlcv.index)
+    sentiment = _load_auxiliary_source(data_cfg.sentiment_scores, ohlcv.index)
+
+    base_features = _engineer_base_features(
+        ohlcv,
+        data_cfg.feature_engineering,
+        auxiliary_sources={"funding": funding, "order_book": order_book},
+    )
     if not funding.empty:
         base_features = base_features.join(funding, how="left")
-
-    order_book = _load_auxiliary_source(data_cfg.order_book_depth, ohlcv.index)
     if not order_book.empty:
         base_features = base_features.join(order_book, how="left")
-
-    on_chain = _load_auxiliary_source(data_cfg.on_chain_activity, ohlcv.index)
     if not on_chain.empty:
         base_features = base_features.join(on_chain, how="left")
-
-    sentiment = _load_auxiliary_source(data_cfg.sentiment_scores, ohlcv.index)
     if not sentiment.empty:
         base_features = base_features.join(sentiment, how="left")
 
@@ -260,8 +323,13 @@ def build_labels(data: pd.DataFrame, config: LabelConfig) -> pd.Series:
     price = data[config.price_column]
     forward_returns = price.pct_change(config.horizon_bars).shift(-config.horizon_bars)
 
+    threshold: float | pd.Series = config.threshold
+    if config.rolling_vol_window and config.rolling_vol_window > 0:
+        realized_vol = price.pct_change().rolling(config.rolling_vol_window).std()
+        threshold = realized_vol * config.rolling_vol_multiplier + config.threshold
+
     if config.task == "binary":
-        labels = (forward_returns > config.threshold).astype(int)
+        labels = (forward_returns > threshold).astype(int)
     else:
         labels = forward_returns
 
@@ -649,6 +717,7 @@ def run_practical_crypto_ml_pipeline(
 __all__ = [
     "AuxiliarySourceConfig",
     "MultiSourceDataConfig",
+    "FeatureEngineeringConfig",
     "LabelConfig",
     "ModelStackConfig",
     "PortfolioConfig",
