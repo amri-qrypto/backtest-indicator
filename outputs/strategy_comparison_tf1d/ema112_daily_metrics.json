@@ -7,6 +7,12 @@
     "sharpe_ratio": 0.2888231382558295,
     "total_return": 0.13274460640532926
   },
+  "standard_metrics": {
+    "cagr": 0.030815423412956067,
+    "hit_rate": 0.252,
+    "max_drawdown": -0.5511918426868183,
+    "total_return": 0.13274460640532926
+  },
   "trade_summary": {
     "avg_abs_position": 0.5113333333333333,
     "avg_bars": 19.175,
