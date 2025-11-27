@@ -401,6 +401,31 @@ print(result.portfolio_weights.tail())
 - **Pasar choppy dengan banyak katalis makro** – Gunakan `ml_lightgbm` karena probabilitasnya dapat diarahkan menjadi portofolio market-neutral atau long-short cepat (hit rate 54%). Kombinasikan dengan guardrail `PortfolioConfig` (max leverage, turnover limit) supaya sinyal yang sering flip tidak menambah biaya transaksi berlebihan.
 - **Sideways panjang** – VWAP + filter RSI paling stabil. EMA112 bisa tetap dipakai bila menambah filter ATR atau menurunkan leverage. ML stack dapat dijadikan overlay: hanya jalankan trade rule-based ketika probabilitas ML searah untuk mengurangi whipsaw.
 
+### Menggabungkan sinyal ML dengan strategi indikator
+- **Overlay** – Memakai probabilitas ML sebagai penguat posisi indikator. Contoh: ketika EMA112 memberi sinyal long, ukuran posisi bisa ditimbang oleh `p_long = prob_ml - 0.5` sehingga posisi penuh hanya terjadi jika konfidensi ML tinggi (misal `prob_ml > 0.65`).
+- **Filter** – Menahan eksekusi indikator sampai ML setuju arahnya. Praktis untuk mengurangi whipsaw EMA112 saat pasar choppy: jalankan long/short hanya bila `prob_ml` melewati ambang yang sama arah dengan sinyal indikator; jika di bawah threshold, bar dilewatkan.
+- **Referensi threshold** – Notebook perbandingan 1 jam (`notebooks/strategy_comparison_tf1h.ipynb`) menyimpan metrik ML ke `outputs/strategy_comparison/ml_hourly_metrics.json`. Nilai seperti `best_threshold` atau `roc_auc` bisa dipakai sebagai acuan awal sebelum grid-search ulang di dataset terbaru.
+
+Contoh pseudo-code sederhana (adaptasi cell pemuatan metrik di notebook perbandingan):
+
+```python
+import json
+
+# Muat ambang ML dari artefak agar konsisten dengan evaluasi sebelumnya
+with open("outputs/strategy_comparison/ml_hourly_metrics.json") as f:
+    ml_metrics = json.load(f)
+
+prob_th = ml_metrics["ml_lightgbm"]["best_threshold"]  # misal 0.55
+ml_prob = signals["ml_probability"].shift(1)  # hindari look-ahead
+
+# Filter: EMA112 hanya dieksekusi jika ML searah & yakin
+signals["long_entry"] = signals["long_entry"] & (ml_prob > prob_th)
+signals["short_entry"] = signals["short_entry"] & (ml_prob < 1 - prob_th)
+
+# Overlay: skala posisi long/short menurut kekuatan ML
+signals["position"] = signals["position"] * (ml_prob - 0.5) * 2
+```
+
 ## Notebook Referensi
 
 - **`notebooks/features_target_pipeline.ipynb`** – Loader OHLCV → rekayasa fitur teknikal → label builder. Notebook ini memanggil utilitas `src/features` untuk menghitung return multi-horizon, momentum, volatilitas, volume anomaly dan menyimpan dataset ke `data/processed/*.csv` untuk dipakai ulang oleh pipeline ML.
