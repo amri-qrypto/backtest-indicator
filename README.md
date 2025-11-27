@@ -129,8 +129,17 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
 4. **Eksperimen multi-strategi** dengan membuat beberapa file konfigurasi di `configs/` dan
    menjalankan CLI dalam loop/Makefile untuk mengisi `outputs/` dengan hasil yang siap dibandingkan.
    Contoh preset siap pakai:
-   - `configs/ema112_hourly.json` → EMA112 trend-following pada `data/BINANCE_ETHUSDT.P, 60.csv`.
-   - `configs/vwap_hourly.json` → Strategi VWAP mean-reversion pada file yang sama.
+  - `configs/ema112_hourly.json` → EMA112 trend-following pada `data/BINANCE_ETHUSDT.P, 60.csv`.
+  - `configs/vwap_hourly.json` → Strategi VWAP mean-reversion pada file yang sama.
+  - Notebook perbandingan lintas timeframe: `notebooks/strategy_comparison_tf1h.ipynb`
+    (data Binance ETHUSDT perpetual 1H) dan `notebooks/strategy_comparison_tf1d.ipynb`
+    (data Binance ETHUSD 1D) sudah menyiapkan `OUTPUT_DIR` serta file ekspor Excel terpisah
+    sehingga artefak tidak bercampur. Ringkasan data/output tiap timeframe beserta insight
+    tren (bullish vs sideways/bearish) yang sudah diuji tersedia di
+    `notebooks/strategy_timeframe_matrix.ipynb`. Artefak sinyal ML hourly yang berasal dari
+    `outputs/result-test/ml_baseline.xlsx` kini diturunkan ke
+    `outputs/strategy_comparison/ml_hourly_metrics.json` agar bisa dibaca langsung oleh
+    matriks timeframe.
 
 ### Tahap 3 – Practical Crypto ML Pipeline
 1. **Konfigurasikan sumber data** menggunakan `MultiSourceDataConfig` pada

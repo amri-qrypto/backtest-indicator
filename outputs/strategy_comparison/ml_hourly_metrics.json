@@ -1,0 +1,38 @@
+{
+  "ml_lasso": {
+    "cv_accuracy": 0.5403687943262411,
+    "cv_auc": 0.5534735600647074,
+    "test_accuracy": 0.516548463356974,
+    "test_roc_auc": 0.5218614271033626,
+    "test_signal_sharpe": -0.5026925535188294,
+    "deployment_decision": "reject_negative_sharpe",
+    "timeframe": "1H",
+    "data_source": "outputs/result-test/ml_baseline.xlsx",
+    "labels": "1 jika forward_return > 0 else 0",
+    "horizon_hours": 5
+  },
+  "ml_elasticnet": {
+    "cv_accuracy": 0.5404822695035462,
+    "cv_auc": 0.5535003242056233,
+    "test_accuracy": 0.5177304964539007,
+    "test_roc_auc": 0.5217108160656547,
+    "test_signal_sharpe": -0.538620184693603,
+    "deployment_decision": "reject_negative_sharpe",
+    "timeframe": "1H",
+    "data_source": "outputs/result-test/ml_baseline.xlsx",
+    "labels": "1 jika forward_return > 0 else 0",
+    "horizon_hours": 5
+  },
+  "ml_lightgbm": {
+    "cv_accuracy": 0.5192624113475177,
+    "cv_auc": 0.530657396395004,
+    "test_accuracy": 0.5278959810874705,
+    "test_roc_auc": 0.531046238707529,
+    "test_signal_sharpe": 0.7188390767974948,
+    "deployment_decision": "deploy",
+    "timeframe": "1H",
+    "data_source": "outputs/result-test/ml_baseline.xlsx",
+    "labels": "1 jika forward_return > 0 else 0",
+    "horizon_hours": 5
+  }
+}
