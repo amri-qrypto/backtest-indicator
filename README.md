@@ -431,6 +431,7 @@ print(result.portfolio_weights.tail())
 ### ML Linear Regression (`ml_linreg`)
 - **Pipeline** – Menjalankan `run_practical_crypto_ml_pipeline` dengan `LabelConfig(task="regression")` sehingga target adalah forward returns kontinu. Stack default mencakup LinearRegression, Ridge, dan Lasso (opsional GradientBoostingRegressor), masing-masing dievaluasi via walk-forward CV dengan metrik `mae`/`r2`.
 - **Interpretasi sinyal** – Ensemble prediksi dikonversi ke [-1, 1] dengan `sign(prediksi) * quantile(|prediksi|)`: sign menentukan arah (long/short), sedangkan quantile absolut menjadi skala kekuatan sehingga sinyal 0.8 berarti konfidensi tinggi untuk long.
+- **Perlakuan NaN** – Prediksi out-of-fold yang tidak terisi (awal deret waktu yang hanya menjadi data train) kini diisi ulang memakai model yang sudah dilatih penuh, sehingga frame sinyal tidak kosong dan metrik backtest tidak lagi menampilkan `NaN` untuk strategi ML linear.
 - **Contoh CLI** – Preset regresi single-asset dapat langsung dieksekusi lewat `python -m src.cli.run_single_asset configs/ml_linreg_hourly.json`; artefak disimpan di `outputs/ml_linreg/ethusdt_ml_linreg_*`.
 - **Notebook** – Atur `CONFIG["strategy_name"] = "ml_linreg"` beserta `CONFIG["strategy_kwargs"]["data_path"]` agar notebook memakai berkas OHLCV yang sama. Notebook akan menampilkan `ml_signal` (arah & kekuatan), `predicted_return`, serta flag guardrail.
 
