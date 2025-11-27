@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
@@ -166,6 +169,8 @@ class MLPipelineResult:
     labels: pd.Series
     models: Dict[str, object]
     cv_metrics: Dict[str, Mapping[str, float]]
+    cv_report: Dict[str, Mapping[str, object]]
+    cv_artifacts: Mapping[str, Path]
     predictions: pd.DataFrame
     signals: pd.Series
     portfolio_weights: pd.Series
@@ -336,6 +341,113 @@ def build_labels(data: pd.DataFrame, config: LabelConfig) -> pd.Series:
     return labels.loc[data.index]
 
 
+def _population_stability_index(
+    train: pd.Series, test: pd.Series, *, bins: int = 10
+) -> float:
+    combined = pd.concat([train, test]).dropna()
+    if combined.empty:
+        return 0.0
+
+    quantiles = np.linspace(0, 1, bins + 1)
+    edges = np.unique(np.nanquantile(combined, quantiles))
+    if len(edges) < 2:
+        return 0.0
+
+    train_counts, _ = np.histogram(train.dropna(), bins=edges)
+    test_counts, _ = np.histogram(test.dropna(), bins=edges)
+
+    train_dist = train_counts / max(train_counts.sum(), 1)
+    test_dist = test_counts / max(test_counts.sum(), 1)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        psi = (test_dist - train_dist) * np.log(np.divide(test_dist, train_dist))
+    psi = np.nan_to_num(psi, nan=0.0, posinf=0.0, neginf=0.0)
+    return float(psi.sum())
+
+
+def _serialize_label_distribution(labels: pd.Series) -> Dict[str, float]:
+    counts = labels.value_counts(dropna=False)
+    total = counts.sum()
+    return {str(idx): float(val / total) if total else 0.0 for idx, val in counts.items()}
+
+
+def _replace_nan(value):
+    if isinstance(value, dict):
+        return {key: _replace_nan(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_replace_nan(item) for item in value]
+    if isinstance(value, float) or isinstance(value, np.floating):
+        if np.isnan(value):
+            return None
+        return float(value)
+    return value
+
+
+def _export_cv_report(
+    cv_report: Mapping[str, Mapping[str, object]], output_path: str | Path
+) -> Path:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cleaned = _replace_nan(cv_report)
+    path.write_text(json.dumps(cleaned, indent=2, sort_keys=True))
+    return path
+
+
+def _cv_stability_table(cv_report: Mapping[str, Mapping[str, object]]) -> pd.DataFrame:
+    records: List[Mapping[str, object]] = []
+    for model, report in cv_report.items():
+        for fold in report.get("folds", []):
+            drift = fold.get("drift", {})
+            records.append(
+                {
+                    "model": model,
+                    "fold": fold.get("fold"),
+                    "average_psi": drift.get("average_psi", 0.0),
+                    "max_psi": drift.get("max_psi", 0.0),
+                }
+            )
+    return pd.DataFrame.from_records(records)
+
+
+def _plot_cv_stability(
+    cv_report: Mapping[str, Mapping[str, object]], output_path: str | Path
+) -> Optional[Path]:
+    table = _cv_stability_table(cv_report)
+    if table.empty:
+        return None
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plt.figure(figsize=(8, 4))
+    for model, group in table.groupby("model"):
+        plt.plot(group["fold"], group["average_psi"], marker="o", label=model)
+    plt.axhline(0.1, color="red", linestyle="--", linewidth=1, label="PSI 0.1")
+    plt.xlabel("Fold")
+    plt.ylabel("Average PSI")
+    plt.title("CV Feature Stability (Train vs Test)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    return output_path
+
+
+def _export_cv_artifacts(
+    cv_report: Mapping[str, Mapping[str, object]],
+    report_path: Optional[str | Path],
+    plot_path: Optional[str | Path],
+) -> Dict[str, Path]:
+    artifacts: Dict[str, Path] = {}
+    if report_path is not None:
+        artifacts["report"] = _export_cv_report(cv_report, report_path)
+    if plot_path is not None:
+        plotted = _plot_cv_stability(cv_report, plot_path)
+        if plotted is not None:
+            artifacts["stability_plot"] = plotted
+    return artifacts
+
+
 # ---------------------------------------------------------------------------
 # Model stack and evaluation
 
@@ -347,38 +459,94 @@ def _train_and_score_model(
     labels: pd.Series,
     cv: TimeSeriesSplit,
     task: str,
-) -> Tuple[object, Mapping[str, float], pd.Series]:
+) -> Tuple[object, Mapping[str, float], pd.Series, Mapping[str, object]]:
     cv_accuracy: List[float] = []
     cv_auc: List[float] = []
     cv_mae: List[float] = []
     cv_r2: List[float] = []
     oof_pred = pd.Series(index=features.index, dtype=float, name=model_name)
+    fold_details: List[Dict[str, object]] = []
 
-    for train_idx, test_idx in cv.split(features):
+    for fold_id, (train_idx, test_idx) in enumerate(cv.split(features)):
         X_train, X_test = features.iloc[train_idx], features.iloc[test_idx]
         y_train, y_test = labels.iloc[train_idx], labels.iloc[test_idx]
 
         model.fit(X_train, y_train)
+        fold_payload: Dict[str, object] = {
+            "fold": fold_id,
+            "train_size": int(len(train_idx)),
+            "test_size": int(len(test_idx)),
+            "train_range": {
+                "start": str(X_train.index.min()),
+                "end": str(X_train.index.max()),
+            },
+            "test_range": {
+                "start": str(X_test.index.min()),
+                "end": str(X_test.index.max()),
+            },
+            "label_distribution": {
+                "train": _serialize_label_distribution(y_train),
+                "test": _serialize_label_distribution(y_test),
+            },
+        }
+
+        feature_stats = {
+            "train_mean": X_train.mean().astype(float).to_dict(),
+            "test_mean": X_test.mean().astype(float).to_dict(),
+            "train_std": X_train.std(ddof=0).astype(float).to_dict(),
+            "test_std": X_test.std(ddof=0).astype(float).to_dict(),
+        }
+        psi_scores = {
+            col: _population_stability_index(X_train[col], X_test[col])
+            for col in features.columns
+        }
+        drift_summary = {
+            "average_psi": float(np.nanmean(list(psi_scores.values()))),
+            "max_psi": float(np.nanmax(list(psi_scores.values())))
+            if psi_scores
+            else 0.0,
+            "feature_psi": psi_scores,
+        }
+
         if task == "binary":
             probs = _predict_proba(model, X_test)
             oof_pred.iloc[test_idx] = probs
 
-            cv_accuracy.append(accuracy_score(y_test, (probs > 0.5).astype(int)))
+            fold_accuracy = accuracy_score(y_test, (probs > 0.5).astype(int))
+            cv_accuracy.append(fold_accuracy)
             try:
                 auc = roc_auc_score(y_test, probs)
                 cv_auc.append(auc)
             except ValueError:
+                auc = np.nan
                 cv_auc.append(np.nan)
+
+            fold_payload["scores"] = {
+                "accuracy": float(fold_accuracy),
+                "roc_auc": float(auc) if not np.isnan(auc) else np.nan,
+            }
         elif task == "regression":
             preds = model.predict(X_test)
             oof_pred.iloc[test_idx] = preds
-            cv_mae.append(mean_absolute_error(y_test, preds))
+            fold_mae = mean_absolute_error(y_test, preds)
+            cv_mae.append(fold_mae)
             try:
-                cv_r2.append(r2_score(y_test, preds))
+                fold_r2 = r2_score(y_test, preds)
+                cv_r2.append(fold_r2)
             except ValueError:
+                fold_r2 = np.nan
                 cv_r2.append(np.nan)
+
+            fold_payload["scores"] = {
+                "mae": float(fold_mae),
+                "r2": float(fold_r2) if not np.isnan(fold_r2) else np.nan,
+            }
         else:  # pragma: no cover - defensive branch
             raise ValueError(f"Unsupported task '{task}' for model scoring")
+
+        fold_payload["feature_stats"] = feature_stats
+        fold_payload["drift"] = drift_summary
+        fold_details.append(fold_payload)
 
     if task == "binary":
         metrics = {
@@ -391,7 +559,14 @@ def _train_and_score_model(
             "r2": float(np.nanmean(cv_r2)),
         }
     model.fit(features, labels)
-    return model, metrics, oof_pred
+
+    cv_report = {
+        "model": model_name,
+        "task": task,
+        "folds": fold_details,
+        "aggregate": metrics,
+    }
+    return model, metrics, oof_pred, cv_report
 
 
 def _predict_proba(model, features: pd.DataFrame) -> np.ndarray:
@@ -428,9 +603,12 @@ def train_model_stack(
     config: ModelStackConfig,
     *,
     task: str = "binary",
-) -> Tuple[Dict[str, object], Dict[str, Mapping[str, float]], pd.DataFrame]:
+) -> Tuple[
+    Dict[str, object], Dict[str, Mapping[str, float]], pd.DataFrame, Dict[str, Mapping[str, object]]
+]:
     models: Dict[str, object] = {}
     cv_metrics: Dict[str, Mapping[str, float]] = {}
+    cv_reports: Dict[str, Mapping[str, object]] = {}
     predictions = pd.DataFrame(index=features.index)
 
     cv = TimeSeriesSplit(n_splits=config.cv_splits)
@@ -457,11 +635,12 @@ def train_model_stack(
                     max_iter=config.logistic_max_iter,
                     random_state=config.random_state,
                 )
-                model, metrics, preds = _train_and_score_model(
+                model, metrics, preds, cv_report = _train_and_score_model(
                     name, linear_model, features, labels, cv, task
                 )
                 models[name] = model
                 cv_metrics[name] = metrics
+                cv_reports[name] = cv_report
                 predictions[name] = preds
 
         if config.train_logistic_elasticnet:
@@ -477,11 +656,12 @@ def train_model_stack(
                         max_iter=config.logistic_elasticnet_max_iter,
                         random_state=config.random_state,
                     )
-                    model, metrics, preds = _train_and_score_model(
+                    model, metrics, preds, cv_report = _train_and_score_model(
                         name, elastic, features, labels, cv, task
                     )
                     models[name] = model
                     cv_metrics[name] = metrics
+                    cv_reports[name] = cv_report
                     predictions[name] = preds
 
         if config.train_probit:
@@ -491,11 +671,12 @@ def train_model_stack(
                 )
 
             probit = StatsmodelsProbitClassifier()
-            model, metrics, preds = _train_and_score_model(
+            model, metrics, preds, cv_report = _train_and_score_model(
                 "probit", probit, features, labels, cv, task
             )
             models["probit"] = model
             cv_metrics["probit"] = metrics
+            cv_reports["probit"] = cv_report
             predictions["probit"] = preds
 
         if config.train_sgd:
@@ -513,20 +694,22 @@ def train_model_stack(
                         validation_fraction=config.sgd_validation_fraction,
                         random_state=config.random_state,
                     )
-                    model, metrics, preds = _train_and_score_model(
+                    model, metrics, preds, cv_report = _train_and_score_model(
                         name, sgd, features, labels, cv, task
                     )
                     models[name] = model
                     cv_metrics[name] = metrics
+                    cv_reports[name] = cv_report
                     predictions[name] = preds
 
         if config.train_tree_based:
             gbdt = GradientBoostingClassifier(random_state=config.random_state)
-            model, metrics, preds = _train_and_score_model(
+            model, metrics, preds, cv_report = _train_and_score_model(
                 "gbdt", gbdt, features, labels, cv, task
             )
             models["gbdt"] = model
             cv_metrics["gbdt"] = metrics
+            cv_reports["gbdt"] = cv_report
             predictions["gbdt"] = preds
 
         if config.train_deep_learning:
@@ -544,11 +727,12 @@ def train_model_stack(
                 max_iter=config.mlp_max_iter,
                 random_state=config.random_state,
             )
-            model, metrics, preds = _train_and_score_model(
+            model, metrics, preds, cv_report = _train_and_score_model(
                 "mlp", mlp, features, labels, cv, task
             )
             models["mlp"] = model
             cv_metrics["mlp"] = metrics
+            cv_reports["mlp"] = cv_report
             predictions["mlp"] = preds
     elif task == "regression":
         if config.train_linear:
@@ -558,20 +742,22 @@ def train_model_stack(
                 "lasso": Lasso(random_state=config.random_state),
             }
             for name, model_instance in linear_variants.items():
-                model, metrics, preds = _train_and_score_model(
+                model, metrics, preds, cv_report = _train_and_score_model(
                     name, model_instance, features, labels, cv, task
                 )
                 models[name] = model
                 cv_metrics[name] = metrics
+                cv_reports[name] = cv_report
                 predictions[name] = preds
 
         if config.train_tree_based:
             gbdt_reg = GradientBoostingRegressor(random_state=config.random_state)
-            model, metrics, preds = _train_and_score_model(
+            model, metrics, preds, cv_report = _train_and_score_model(
                 "gbdt_reg", gbdt_reg, features, labels, cv, task
             )
             models["gbdt_reg"] = model
             cv_metrics["gbdt_reg"] = metrics
+            cv_reports["gbdt_reg"] = cv_report
             predictions["gbdt_reg"] = preds
     else:  # pragma: no cover - defensive branch
         raise ValueError(f"Unsupported task '{task}'")
@@ -579,7 +765,7 @@ def train_model_stack(
     if predictions.empty:
         raise ValueError("Model stack is empty. Enable at least one model type")
 
-    return models, cv_metrics, predictions
+    return models, cv_metrics, predictions, cv_reports
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +866,8 @@ def run_practical_crypto_ml_pipeline(
     label_cfg: LabelConfig,
     model_cfg: ModelStackConfig,
     portfolio_cfg: PortfolioConfig,
+    cv_report_path: Optional[str | Path] = Path("outputs/cv_report.json"),
+    cv_plot_path: Optional[str | Path] = Path("outputs/cv_stability.png"),
 ) -> MLPipelineResult:
     """Execute the multi-source ML pipeline and return rich artifacts."""
 
@@ -691,9 +879,10 @@ def run_practical_crypto_ml_pipeline(
     merged_features = merged_features.loc[labels.index]
 
     feature_store, normalized = FeatureStore.fit(merged_features)
-    models, cv_metrics, oof_predictions = train_model_stack(
+    models, cv_metrics, oof_predictions, cv_report = train_model_stack(
         normalized, labels, model_cfg, task=label_cfg.task
     )
+    cv_artifacts = _export_cv_artifacts(cv_report, cv_report_path, cv_plot_path)
     signals = _combine_predictions(oof_predictions, label_cfg.task)
     portfolio_weights, guardrails = _build_portfolio(signals, portfolio_cfg)
     realized_performance = _evaluate_realized_performance(
@@ -706,6 +895,8 @@ def run_practical_crypto_ml_pipeline(
         labels=labels,
         models=models,
         cv_metrics=cv_metrics,
+        cv_report=cv_report,
+        cv_artifacts=cv_artifacts,
         predictions=oof_predictions,
         signals=signals,
         portfolio_weights=portfolio_weights,
