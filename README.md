@@ -114,6 +114,9 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
      menjalankan strategi dari `src/strategy_backtest/registry.py`, lalu mengembalikan
      `BacktestOutputs` yang berisi metrik, ringkasan trade, dan hasil eksekusi.
    - `save_backtest_outputs` menyimpan `*_metrics.json`, `*_trades.csv`, dan `*_equity.png`.
+     File JSON kini menyertakan blok `standard_metrics` dengan skema konsisten untuk
+     `total_return`, `cagr`, `max_drawdown`, dan `hit_rate` sehingga artefak lintas strategi
+     dapat langsung dibandingkan.
 2. **Pilih modus eksekusi**:
    - **Notebook**: jalankan `jupyter lab`, buka `notebooks/backtest-strategy.ipynb`, ubah `CONFIG`,
      lalu jalankan semua sel untuk melihat metrik dan grafik.
@@ -194,6 +197,9 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
 8. **Jalankan semuanya** melalui `run_practical_crypto_ml_pipeline` dan simpan objek
    `MLPipelineResult` untuk dianalisis lebih lanjut (mis. `result.cv_metrics`,
    `result.portfolio_weights.tail()`).
+9. **Simpan artefak backtest sinyal ML** dengan `save_ml_backtest_outputs` (dari
+   `src/pipelines/ml_signals.py`) yang menulis `*_metrics.json` berisi `standard_metrics`
+   (`total_return`, `cagr`, `max_drawdown`, `hit_rate`) serta ringkasan trade log ke CSV.
 
 ### Langkah 7 – Baseline Linear / Tree / Deep Learning
 
