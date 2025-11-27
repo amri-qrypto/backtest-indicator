@@ -57,7 +57,9 @@ class SignalBacktester:
         self.price_column = price_column
         self.assume_same_bar_execution = assume_same_bar_execution
 
-    def run(self, signals: pd.DataFrame) -> BacktestOutputs:
+    def run(
+        self, signals: pd.DataFrame, position_scale: Optional[pd.Series] = None
+    ) -> BacktestOutputs:
         """Jalankan backtest berbasis sinyal dengan output posisi, trade log, dan metrik."""
 
         if signals.empty:
@@ -67,8 +69,12 @@ class SignalBacktester:
         context_columns = [
             column
             for column in signals.columns
-            if column not in {"long_entry", "long_exit", "short_entry", "short_exit"}
+            if column
+            not in {"long_entry", "long_exit", "short_entry", "short_exit", "position_scale"}
         ]
+
+        if position_scale is None and "position_scale" in signals.columns:
+            position_scale = signals["position_scale"]
 
         index = self.data.index
         long_entry = self._to_bool(signals.get("long_entry"), index)
@@ -84,12 +90,14 @@ class SignalBacktester:
             signals[context_columns] if context_columns else None,
         )
 
-        results_df = self._build_backtest_frame(positions)
+        scaled_positions = self._apply_position_scale(positions, position_scale)
+
+        results_df = self._build_backtest_frame(scaled_positions)
         metrics = qflib_metrics_from_returns(results_df["strategy_return"])
         trade_summary = self._summarise_trades(trades, results_df["position"])
 
         return BacktestOutputs(
-            positions=positions,
+            positions=results_df["position"],
             trades=trades,
             results=results_df,
             metrics=metrics,
@@ -443,6 +451,17 @@ class SignalBacktester:
         results["drawdown"] = results["equity_curve"] / rolling_max - 1.0
         results["cumulative_pnl"] = results["equity_curve"] - results["equity_curve"].iloc[0]
         return results
+
+    @staticmethod
+    def _apply_position_scale(
+        positions: pd.Series, scale: Optional[pd.Series]
+    ) -> pd.Series:
+        if scale is None:
+            return positions
+
+        aligned = pd.to_numeric(scale.reindex(positions.index), errors="coerce").fillna(0.0)
+        scaled = (positions.astype(float) * aligned).rename("position")
+        return scaled
 
     @staticmethod
     def _context_to_dict(context: Optional[pd.Series]) -> Dict[str, object]:
