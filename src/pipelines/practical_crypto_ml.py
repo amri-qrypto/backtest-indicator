@@ -560,6 +560,15 @@ def _train_and_score_model(
         }
     model.fit(features, labels)
 
+    # Isi prediksi yang hilang (bagian awal time-series yang hanya menjadi data train)
+    # agar sinyal portofolio tidak dipenuhi NaN dan tetap bisa dievaluasi.
+    if oof_pred.isna().any():
+        if task == "binary":
+            filled = _predict_proba(model, features)
+        else:
+            filled = model.predict(features)
+        oof_pred = oof_pred.fillna(pd.Series(filled, index=features.index))
+
     cv_report = {
         "model": model_name,
         "task": task,
