@@ -238,7 +238,11 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
    directional accuracy atau korelasi sinyal-label serta information ratio tahunan.
 8. **Jalankan semuanya** melalui `run_practical_crypto_ml_pipeline` dan simpan objek
    `MLPipelineResult` untuk dianalisis lebih lanjut (mis. `result.cv_metrics`,
-   `result.portfolio_weights.tail()`).
+   `result.portfolio_weights.tail()`). Pipeline sekarang otomatis menulis
+   tabel per-fold dan grafik stabilitas PSI ke `outputs/cv_report.json` serta
+   `outputs/cv_stability.png` (path bisa dioverride). File JSON memuat distribusi
+   label train/test, statistik mean/std fitur, serta skor stability (Population
+   Stability Index) per fold sehingga drift dapat dilacak tanpa membuka notebook.
 9. **Simpan artefak backtest sinyal ML** dengan `save_ml_backtest_outputs` (dari
    `src/pipelines/ml_signals.py`) yang menulis `*_metrics.json` berisi `standard_metrics`
    (`total_return`, `cagr`, `max_drawdown`, `hit_rate`) serta ringkasan trade log ke CSV.
@@ -278,9 +282,14 @@ model_cfg = ModelStackConfig(
 )
 ```
 
-Pipeline akan menjalankan walk-forward CV (`TimeSeriesSplit`) untuk ketiga model sekaligus, menyimpan
+Pipeline akan menjalankan walk-forward CV (`TimeSeriesSplit`) untuk ketiga model sekaligus, dan
 mencatat metrik `accuracy` + `roc_auc` (klasifikasi) atau `mae` + `r2` (regresi) di `result.cv_metrics`
-dengan kunci sesuai nama varian (mis. `logistic_en_C1.0_l1r0.5`, `sgd_hinge_alpha0.001`), dan
+dengan kunci sesuai nama varian (mis. `logistic_en_C1.0_l1r0.5`, `sgd_hinge_alpha0.001`). Untuk setiap
+model, `result.cv_report` berisi log per-fold (label balance, rangkuman mean/std fitur, serta PSI train
+vs test) dan disalin ke `outputs/cv_report.json`. Grafik `outputs/cv_stability.png` menampilkan rata-rata
+PSI per fold sehingga pergeseran distribusi fitur mudah dipantau tanpa memuat DataFrame besar. Semua
+path artefak dapat diubah lewat argumen `cv_report_path` / `cv_plot_path` ketika memanggil
+`run_practical_crypto_ml_pipeline`. Prediksi out-of-fold setiap model disimpan di DataFrame `predictions`.
 menggabungkan prediksi menjadi sinyal ensemble. Untuk regresi, gunakan `LabelConfig(task="regression")`
 agar stack berisi LinearRegression/Ridge/Lasso (+GradientBoostingRegressor opsional) dan sinyal diubah
 menjadi arah * sign(prediksi) * kekuatan berdasarkan quantile absolut. Kamu bisa mematikan salah satu
