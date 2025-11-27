@@ -12,6 +12,7 @@ except Exception:  # pragma: no cover - PyYAML may be missing at runtime
     yaml = None  # type: ignore
 
 from ..pipelines.single_asset import (
+    ExternalSignalModulationConfig,
     IndicatorConfig,
     SingleAssetPipelineConfig,
     run_single_asset_pipeline,
@@ -56,6 +57,22 @@ def _build_indicator_configs(payload: Sequence[Mapping[str, Any]]) -> Sequence[I
     return tuple(indicators)
 
 
+def _build_external_signal_config(
+    payload: Mapping[str, Any] | None, base_dir: Path
+) -> ExternalSignalModulationConfig | None:
+    if payload is None:
+        return None
+
+    if not isinstance(payload, Mapping):
+        raise TypeError("external_signals harus berupa mapping jika disediakan.")
+
+    resolved: MutableMapping[str, Any] = dict(payload)
+    if "path" in resolved:
+        resolved["path"] = str(_resolve_path(resolved["path"], base_dir))
+
+    return ExternalSignalModulationConfig(**resolved)
+
+
 def _build_pipeline_config(payload: Mapping[str, Any], base_dir: Path) -> SingleAssetPipelineConfig:
     required_fields = {"data_path", "strategy_name"}
     missing_fields = [field for field in required_fields if field not in payload]
@@ -72,6 +89,10 @@ def _build_pipeline_config(payload: Mapping[str, Any], base_dir: Path) -> Single
 
     indicators = _build_indicator_configs(indicators_payload)
 
+    external_signals_cfg = _build_external_signal_config(
+        payload.get("external_signals"), base_dir
+    )
+
     return SingleAssetPipelineConfig(
         data_path=str(data_path),
         strategy_name=str(strategy_name),
@@ -79,6 +100,7 @@ def _build_pipeline_config(payload: Mapping[str, Any], base_dir: Path) -> Single
         horizon_bars=payload.get("horizon_bars"),
         indicators=indicators,
         price_column=str(payload.get("price_column", "close")),
+        external_signals=external_signals_cfg,
     )
 
 
@@ -112,6 +134,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Jika di-set, tidak menyimpan metrics/trade log ke disk.",
     )
+    parser.add_argument(
+        "--external-signal",
+        type=Path,
+        default=None,
+        help="Path CSV berisi kolom waktu + sinyal eksternal untuk scaling/gating posisi.",
+    )
     return parser.parse_args(argv)
 
 
@@ -119,6 +147,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     config_path = args.config.resolve()
     payload = _load_mapping(config_path)
+    if args.external_signal:
+        payload["external_signals"] = dict(payload.get("external_signals", {}))
+        payload["external_signals"]["path"] = str(args.external_signal)
+
     pipeline_config = _build_pipeline_config(payload, config_path.parent)
 
     outputs = run_single_asset_pipeline(pipeline_config)
