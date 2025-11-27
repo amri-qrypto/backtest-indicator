@@ -37,11 +37,13 @@ single-asset, sementara pipeline ML dapat dipanggil langsung lewat skrip Python/
   funding, order-book depth, on-chain activity, dan sentiment (setiap sumber punya rule resample,
   kolom pilihan, prefix, serta batas forward-fill).
 - 🧮 **Feature store & normalisasi** – `_engineer_base_features` membangun blok teknikal
-  (return multi-horizon, momentum, volatilitas, volume, serta Average Directional Index/ADX
-  lengkap dengan ±DI) kemudian seluruh fitur digabung, di-clip dengan Z-score, di-imputasi, dan
-  dinormalisasi oleh `FeatureStore` berbasis `StandardScaler`.
+  (return multi-horizon, momentum, volatilitas, volume, jarak ke EMA) dan kini dapat menambahkan
+  fitur opsional seperti rolling funding skew, order-book imbalance, serta realized volatility
+  intrabar lewat `FeatureEngineeringConfig`. Seluruh sumber kemudian digabung, di-clip dengan
+  Z-score, di-imputasi, dan dinormalisasi oleh `FeatureStore` berbasis `StandardScaler`.
 - 🎯 **Label builder fleksibel** – `LabelConfig` menentukan horizon (mis. 24 bar), jenis tugas
-  (binary/regression), threshold, dan kolom harga untuk membentuk target ML.
+  (binary/regression), threshold (statis atau berbasis volatilitas rolling), dan kolom harga untuk
+  membentuk target ML.
 - 🤖 **Model stack + walk-forward CV** – `ModelStackConfig` mengaktifkan Logistic Regression L1 dan
   Gradient Boosting, masing-masing dievaluasi dengan `TimeSeriesSplit` agar tidak terjadi data
   leakage. Out-of-fold prediction digabung menjadi ensembel sinyal [-1, 1].
@@ -153,11 +155,40 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
    - Fungsi `_load_auxiliary_source` memastikan setiap CSV memiliki kolom `time` dan di-align ke
      index OHLCV.
 2. **Bangun fitur** dengan `_engineer_base_features` (return multi-horizon, momentum, volatilitas,
-   sinyal volume, jarak ke EMA). Seluruh sumber kemudian digabung lewat `_merge_sources`, di-clip
-   berdasarkan Z-score, dan diimputasi/`dropna` sesuai konfigurasi.
-3. **Buat label** memakai `LabelConfig`:
+   sinyal volume, jarak ke EMA). Gunakan `FeatureEngineeringConfig` untuk mengaktifkan fitur
+   tambahan seperti rolling funding skew (memanfaatkan sumber `funding_rates`), order-book
+   imbalance (menggunakan kolom bid/ask volume), atau realized volatility intrabar dari rentang
+   high-low. Seluruh sumber kemudian digabung lewat `_merge_sources`, di-clip berdasarkan Z-score,
+   dan diimputasi/`dropna` sesuai konfigurasi.
    ```python
-   labels = build_labels(ohlcv, LabelConfig(horizon_bars=24, task="binary", threshold=0.0))
+   feature_cfg = FeatureEngineeringConfig(
+       realized_vol_window=24,
+       funding_skew_window=72,
+       funding_skew_column="funding_rate",
+       order_book_imbalance_window=12,
+       order_book_bid_column="bid_volume",
+       order_book_ask_column="ask_volume",
+   )
+   data_cfg = MultiSourceDataConfig(
+       ohlcv_path="data/sample_1h_data.csv",
+       funding_rates=AuxiliarySourceConfig(path="data/funding.csv", prefix="fund_"),
+       order_book_depth=AuxiliarySourceConfig(path="data/order_book.csv", prefix="ob_"),
+       feature_engineering=feature_cfg,
+   )
+   ```
+3. **Buat label** memakai `LabelConfig` (mendukung threshold statis atau dinamis berbasis
+   volatilitas rolling):
+   ```python
+   labels = build_labels(
+       ohlcv,
+       LabelConfig(
+           horizon_bars=24,
+           task="binary",
+           threshold=0.0,
+           rolling_vol_window=48,
+           rolling_vol_multiplier=0.5,
+       ),
+   )
    labels_reg = build_labels(ohlcv, LabelConfig(horizon_bars=24, task="regression"))
    ```
    Label akan sejajar dengan index fitur setelah `dropna()`. Gunakan `task="regression"` bila ingin
