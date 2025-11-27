@@ -56,8 +56,8 @@ def _rsi(series: pd.Series, window: int) -> pd.Series:
     gain = delta.clip(lower=0.0)
     loss = -delta.clip(upper=0.0)
     avg_gain = gain.ewm(alpha=1 / window, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / window, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    avg_loss = loss.ewm(alpha=1 / window, adjust=False).mean().replace(0.0, 1e-12)
+    rs = avg_gain / avg_loss
     return 100.0 - 100.0 / (1.0 + rs)
 
 
@@ -93,7 +93,8 @@ class Strategy(StrategyBase):
         ),
         exit=(
             "Stop loss berbasis ATR: posisi long keluar jika harga menyentuh entry - ATR*multiplier, "
-            "posisi short keluar jika harga menyentuh entry + ATR*multiplier. Tidak ada target profit eksplisit."
+            "posisi short keluar jika harga menyentuh entry + ATR*multiplier. Target profit opsional dapat diaktifkan "
+            "dengan multiplier ATR yang sama untuk memastikan rasio risk-reward konsisten."
         ),
         parameters={
             "rsi_length": 14,
@@ -101,6 +102,7 @@ class Strategy(StrategyBase):
             "rsi_oversold": 30,
             "atr_length": 14,
             "atr_stop_multiplier": 1.5,
+            "atr_take_profit_multiplier": None,
             "session_frequency": "1D",
         },
         context_columns=(
@@ -109,6 +111,7 @@ class Strategy(StrategyBase):
             "atr",
             "active_entry_price",
             "stop_level",
+            "take_profit_level",
             "position",
         ),
     )
@@ -120,6 +123,7 @@ class Strategy(StrategyBase):
         rsi_oversold: int = 30,
         atr_length: int = 14,
         atr_stop_multiplier: float = 1.5,
+        atr_take_profit_multiplier: float | None = None,
         session_frequency: str = "1D",
     ) -> None:
         normalized_frequency = _normalize_frequency(session_frequency)
@@ -130,6 +134,7 @@ class Strategy(StrategyBase):
             rsi_oversold=rsi_oversold,
             atr_length=atr_length,
             atr_stop_multiplier=atr_stop_multiplier,
+            atr_take_profit_multiplier=atr_take_profit_multiplier,
             session_frequency=normalized_frequency,
         )
         self.rsi_length = rsi_length
@@ -137,6 +142,7 @@ class Strategy(StrategyBase):
         self.rsi_oversold = rsi_oversold
         self.atr_length = atr_length
         self.atr_stop_multiplier = atr_stop_multiplier
+        self.atr_take_profit_multiplier = atr_take_profit_multiplier
         self.session_frequency = normalized_frequency
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -174,11 +180,13 @@ class Strategy(StrategyBase):
 
         active_entry_price = pd.Series(float("nan"), index=index)
         stop_level = pd.Series(float("nan"), index=index)
+        take_profit_level = pd.Series(float("nan"), index=index)
         position_context = pd.Series("flat", index=index, dtype="object")
 
         position: Optional[str] = None
         current_entry = float("nan")
         current_stop = float("nan")
+        current_take_profit = float("nan")
 
         for ts in index:
             price = float(close.loc[ts])
@@ -188,34 +196,55 @@ class Strategy(StrategyBase):
 
             active_entry_price.loc[ts] = current_entry
             stop_level.loc[ts] = current_stop
+            take_profit_level.loc[ts] = current_take_profit
             position_context.loc[ts] = position or "flat"
 
             if position == "long":
                 if np.isfinite(current_stop) and bar_low <= current_stop:
                     long_exit.loc[ts] = True
                     position = None
+                elif (
+                    self.atr_take_profit_multiplier is not None
+                    and np.isfinite(current_take_profit)
+                    and bar_high >= current_take_profit
+                ):
+                    long_exit.loc[ts] = True
+                    position = None
             elif position == "short":
                 if np.isfinite(current_stop) and bar_high >= current_stop:
+                    short_exit.loc[ts] = True
+                    position = None
+                elif (
+                    self.atr_take_profit_multiplier is not None
+                    and np.isfinite(current_take_profit)
+                    and bar_low <= current_take_profit
+                ):
                     short_exit.loc[ts] = True
                     position = None
 
             if position is None:
                 current_entry = float("nan")
                 current_stop = float("nan")
+                current_take_profit = float("nan")
 
                 if bool(long_condition.loc[ts]) and np.isfinite(atr_value) and atr_value > 0:
                     long_entry.loc[ts] = True
                     position = "long"
                     current_entry = price
                     current_stop = current_entry - self.atr_stop_multiplier * atr_value
+                    if self.atr_take_profit_multiplier is not None:
+                        current_take_profit = current_entry + self.atr_take_profit_multiplier * atr_value
                 elif bool(short_condition.loc[ts]) and np.isfinite(atr_value) and atr_value > 0:
                     short_entry.loc[ts] = True
                     position = "short"
                     current_entry = price
                     current_stop = current_entry + self.atr_stop_multiplier * atr_value
+                    if self.atr_take_profit_multiplier is not None:
+                        current_take_profit = current_entry - self.atr_take_profit_multiplier * atr_value
 
                 active_entry_price.loc[ts] = current_entry
                 stop_level.loc[ts] = current_stop
+                take_profit_level.loc[ts] = current_take_profit
                 position_context.loc[ts] = position or "flat"
             else:
                 # handle potential flip if opposite signal appears
@@ -225,15 +254,26 @@ class Strategy(StrategyBase):
                     position = "short"
                     current_entry = price
                     current_stop = current_entry + self.atr_stop_multiplier * atr_value
+                    current_take_profit = (
+                        current_entry - self.atr_take_profit_multiplier * atr_value
+                        if self.atr_take_profit_multiplier is not None
+                        else float("nan")
+                    )
                 elif position == "short" and bool(long_condition.loc[ts]) and np.isfinite(atr_value) and atr_value > 0:
                     short_exit.loc[ts] = True
                     long_entry.loc[ts] = True
                     position = "long"
                     current_entry = price
                     current_stop = current_entry - self.atr_stop_multiplier * atr_value
+                    current_take_profit = (
+                        current_entry + self.atr_take_profit_multiplier * atr_value
+                        if self.atr_take_profit_multiplier is not None
+                        else float("nan")
+                    )
 
                 active_entry_price.loc[ts] = current_entry
                 stop_level.loc[ts] = current_stop
+                take_profit_level.loc[ts] = current_take_profit
                 position_context.loc[ts] = position or "flat"
 
         context = pd.DataFrame(
@@ -243,6 +283,7 @@ class Strategy(StrategyBase):
                 "atr": atr,
                 "active_entry_price": active_entry_price,
                 "stop_level": stop_level,
+                "take_profit_level": take_profit_level,
                 "position": position_context,
             },
             index=index,
