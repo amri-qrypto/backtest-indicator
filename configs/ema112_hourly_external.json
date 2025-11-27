@@ -1,0 +1,30 @@
+{
+  "data_path": "../data/BINANCE_ETHUSDT.P, 60.csv",
+  "strategy_name": "ema112",
+  "strategy_kwargs": {
+    "ema_length": 112,
+    "price_column": "close"
+  },
+  "price_column": "close",
+  "horizon_bars": 4000,
+  "indicators": [
+    {
+      "name": "ema",
+      "source_column": "close",
+      "target_column": "ema_reference",
+      "params": {
+        "span": 112
+      }
+    }
+  ],
+  "external_signals": {
+    "path": "sample_external_signal.csv",
+    "value_column": "signal",
+    "timestamp_column": "time",
+    "clip_min": 0.0,
+    "clip_max": 1.0,
+    "block_threshold": 0.05
+  },
+  "output_dir": "outputs/cli_runs",
+  "output_prefix": "ema112_hourly_modulated"
+}

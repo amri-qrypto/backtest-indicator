@@ -22,6 +22,9 @@ single-asset, sementara pipeline ML dapat dipanggil langsung lewat skrip Python/
 - 📦 **Pipeline terintegrasi** – `SingleAssetPipelineConfig` merangkum seluruh parameter (lokasi
   data, strategi, indikator tambahan, dan horizon) dan mengembalikan `BacktestOutputs` berisi
   metrik, trade log, kurva ekuitas, serta statistik lainnya.
+- 🎛️ **Modulasi sinyal eksternal** – pipeline bisa menerima file CSV prediksi/guardrail (mis. skor
+  ML) untuk **scale in/out** posisi atau memblokir entry ketika kepercayaan rendah. File cukup
+  berisi kolom waktu dan sinyal yang akan di-align ke OHLCV.
 - 🗒️ **Notebook parametrik** – setiap notebook di `notebooks/` hanya berisi tiga sel: import,
   konfigurasi `CONFIG`, dan eksekusi pipeline. Mengganti path data atau strategi tidak lagi
   membutuhkan modifikasi kode manual.
@@ -128,7 +131,15 @@ ke bawah agar setup, data, backtest, hingga eksperimen ML berjalan mulus.
          --output-dir outputs/ema50 --prefix btcusdt_daily
      ```
      CLI (`src/cli/run_single_asset.py`) akan mencetak Sharpe, CAGR, total trade, dan lokasi
-     artefak yang disimpan.
+     artefak yang disimpan. Opsional, tambahkan filter sinyal eksternal (skala 0–1) lewat config
+     atau argumen CLI:
+     ```bash
+     python -m src.cli.run_single_asset configs/ema112_hourly_external.json \
+         --external-signal configs/sample_external_signal.csv \
+         --output-dir outputs/ema112_modulated --prefix btcusdt_modulated
+     ```
+     Nilai sinyal `<= block_threshold` akan menutup akses entry (block trade), sementara nilai lain
+     mengalikan bobot posisi berjalan (scale in/out) tanpa mengubah log trade asli.
 3. **Tambahkan indikator opsional** dengan menaruh array `IndicatorConfig` di konfigurasi
    (mis. `{"name": "ema", "source_column": "close", "target_column": "ema_fast", "params": {"span": 25}}`).
 4. **Eksperimen multi-strategi** dengan membuat beberapa file konfigurasi di `configs/` dan

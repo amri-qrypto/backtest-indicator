@@ -42,6 +42,19 @@ class SingleAssetPipelineConfig:
     horizon_bars: Optional[int] = None
     indicators: Sequence[IndicatorConfig] = field(default_factory=tuple)
     price_column: str = "close"
+    external_signals: Optional["ExternalSignalModulationConfig"] = None
+
+
+@dataclass(frozen=True)
+class ExternalSignalModulationConfig:
+    """Optional external signal that scales/gates the base strategy positions."""
+
+    path: str
+    value_column: str = "signal"
+    timestamp_column: str = "time"
+    clip_min: float = 0.0
+    clip_max: float = 1.0
+    block_threshold: float = 0.0
 
 
 _INDICATOR_FUNCTIONS: Dict[str, IndicatorFunction] = {
@@ -74,6 +87,52 @@ def _apply_indicators(data: pd.DataFrame, indicators: Sequence[IndicatorConfig])
     return enriched
 
 
+def _load_external_signal(
+    cfg: ExternalSignalModulationConfig, index: pd.DatetimeIndex
+) -> pd.Series:
+    series = pd.read_csv(cfg.path)
+    if cfg.timestamp_column not in series.columns:
+        raise KeyError(
+            f"CSV eksternal harus memiliki kolom waktu '{cfg.timestamp_column}'"
+        )
+    if cfg.value_column not in series.columns:
+        raise KeyError(
+            f"CSV eksternal harus memiliki kolom sinyal '{cfg.value_column}'"
+        )
+
+    series[cfg.timestamp_column] = pd.to_datetime(
+        series[cfg.timestamp_column], utc=True, errors="coerce"
+    )
+    series = series.dropna(subset=[cfg.timestamp_column])
+    series = series.set_index(cfg.timestamp_column).sort_index()
+    values = pd.to_numeric(series[cfg.value_column], errors="coerce")
+    aligned = values.reindex(index).ffill()
+    clipped = aligned.fillna(0.0).clip(lower=cfg.clip_min, upper=cfg.clip_max)
+    return clipped.rename("position_scale")
+
+
+def _apply_external_modulation(
+    signals: pd.DataFrame,
+    cfg: Optional[ExternalSignalModulationConfig],
+    index: pd.DatetimeIndex,
+) -> tuple[pd.DataFrame, Optional[pd.Series]]:
+    if cfg is None:
+        return signals, None
+
+    scale = _load_external_signal(cfg, index)
+    if signals.empty:
+        return signals, scale
+
+    blocked = scale.abs() <= cfg.block_threshold
+    gated = signals.copy()
+    for column in ("long_entry", "short_entry"):
+        if column in gated.columns:
+            gated[column] = gated[column] & ~blocked
+
+    gated["position_scale"] = scale
+    return gated, scale
+
+
 def run_single_asset_pipeline(config: SingleAssetPipelineConfig) -> BacktestOutputs:
     """Load data, compute indicators, and execute the requested strategy."""
 
@@ -84,10 +143,13 @@ def run_single_asset_pipeline(config: SingleAssetPipelineConfig) -> BacktestOutp
     df = _apply_indicators(df, config.indicators)
 
     strategy = get_strategy(config.strategy_name, **dict(config.strategy_kwargs))
-    signals = strategy.generate_signals(df)
+    raw_signals = strategy.generate_signals(df)
+    signals, position_scale = _apply_external_modulation(
+        raw_signals, config.external_signals, df.index
+    )
 
     backtester = SignalBacktester(df, price_column=config.price_column)
-    outputs = backtester.run(signals)
+    outputs = backtester.run(signals, position_scale=position_scale)
     return outputs
 
 
@@ -146,6 +208,7 @@ def _plot_equity_curve(results: pd.DataFrame, path: Path) -> None:
 
 __all__ = [
     "IndicatorConfig",
+    "ExternalSignalModulationConfig",
     "SingleAssetPipelineConfig",
     "run_single_asset_pipeline",
     "save_backtest_outputs",
